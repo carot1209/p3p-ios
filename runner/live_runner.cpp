@@ -5,6 +5,7 @@
 #include "p3p3ds/input.hpp"
 #include "p3p3ds/interpreter.hpp"
 #include "p3p3ds/kernel_state.hpp"
+#include "p3p3ds/profile.hpp"
 #include "p3p3ds/vfs.hpp"
 #include "bootstrap_expectations.hpp"
 #include "mod_paths.hpp"
@@ -315,11 +316,18 @@ struct LiveRunner::Impl {
         std::uint64_t game_frames = 0;
         double fps = 0.0, speed = 0.0;
         std::uint64_t movie_presses = 0;
+        double idle_s = 0.0; // pacing sleeps (inside the vblank HLE call)
 
         const auto make_report = [&](const char *status) {
             char buf[1024];
             const double wall = seconds_since(run_start);
             const double guest = kernel_owner ? static_cast<double>(kernel_owner->threads().now()) / 1e6 : 0.0;
+            // Wall-time split since the start: HLE time contains rendering, file reads and the pacing sleep.
+            const double hle_s = static_cast<double>(psprecomp::runtime_profile().hle_ns) / 1e9;
+            const double render_s = static_cast<double>(p3p3ds::host_profile().render_ns) / 1e9;
+            const double io_s = static_cast<double>(p3p3ds::host_profile().io_ns) / 1e9;
+            const double interp_s = static_cast<double>(p3p3ds::host_profile().interpreter_ns) / 1e9;
+            const auto pct = [wall](double v) { return wall > 0.0 ? 100.0 * std::max(v, 0.0) / wall : 0.0; };
             std::snprintf(buf, sizeof buf,
                           "P3P iOS - Persona 3 Portable static recompilation\n"
                           "build  : %s\n"
@@ -329,6 +337,7 @@ struct LiveRunner::Impl {
                           "speed  : %.0f%% of real time (last second)\n"
                           "guest  : %.1f s   wall: %.1f s\n"
                           "vblank : %llu   frames: %llu\n"
+                          "time   : idle %.0f%%  render %.0f%%  other hle %.0f%%  io %.0f%%  game code %.0f%%  (interpreter %.1f%%)\n"
                           "audio  : %llu buffers, %llu underruns, %llu skips, %llu dropped, %llu late frames\n"
                           "movie  : %llu START presses\n"
                           "iso    : %s\n"
@@ -336,7 +345,8 @@ struct LiveRunner::Impl {
                           "error  : %s\n",
                           config.build_id.c_str(), status, stage.c_str(), fps, speed * 100.0, guest, wall,
                           static_cast<unsigned long long>(kernel_owner ? kernel_owner->threads().vblank_count() : 0u),
-                          static_cast<unsigned long long>(game_frames), static_cast<unsigned long long>(mixer.buffers()),
+                          static_cast<unsigned long long>(game_frames), pct(idle_s), pct(render_s), pct(hle_s - idle_s - render_s - io_s), pct(io_s),
+                          pct(wall - hle_s), pct(interp_s), static_cast<unsigned long long>(mixer.buffers()),
                           static_cast<unsigned long long>(ring.underruns()), static_cast<unsigned long long>(ring.skips()),
                           static_cast<unsigned long long>(ring.dropped()), static_cast<unsigned long long>(mixer.late_frames()),
                           static_cast<unsigned long long>(movie_presses),
@@ -409,6 +419,8 @@ struct LiveRunner::Impl {
             }
             rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) { tracker->note_cpu_write(address); };
 
+            psprecomp::runtime_profile().enabled = true;
+            p3p3ds::host_profile().enabled = true;
             stage = "run";
             set_stage(stage);
             {
@@ -528,7 +540,11 @@ struct LiveRunner::Impl {
                     const double wall_us = std::chrono::duration<double, std::micro>(Clock::now() - pace_origin).count();
                     if (!pacing_started || reset_pacing) { wall_minus_guest_us = wall_us - guest_us; pacing_started = true; }
                     const double ahead_us = guest_us + wall_minus_guest_us - wall_us;
-                    if (ahead_us > 500.0) std::this_thread::sleep_for(std::chrono::duration<double, std::micro>(ahead_us));
+                    if (ahead_us > 500.0) {
+                        const auto sleep_start = Clock::now();
+                        std::this_thread::sleep_for(std::chrono::duration<double, std::micro>(ahead_us));
+                        idle_s += seconds_since(sleep_start);
+                    }
                     else if (ahead_us < -50000.0) wall_minus_guest_us = wall_us - guest_us;
                 }
 
@@ -596,7 +612,7 @@ bool LiveRunner::start(const Config &config, std::string &error) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     // Translated guest code chains through host calls: a deep host stack.
-    pthread_attr_setstacksize(&attr, std::size_t{64} << 20);
+    pthread_attr_setstacksize(&attr, std::size_t{16} << 20);
 #if defined(__APPLE__)
     pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INTERACTIVE, 0);
 #endif

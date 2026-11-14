@@ -49,8 +49,8 @@ jobs:
             out/build-info.txt
             out/build-log-tail.txt
 
-      # The log goes to the ci-logs branch too, so a failed build can be read
-      # without opening the Actions page.
+      # The log and the IPA go to the ci-logs branch too (one commit, replaced
+      # on every build), so a build can be checked without the Actions page.
       - name: Publish log to ci-logs
         if: always()
         run: |
@@ -59,6 +59,7 @@ jobs:
           TMP="$(mktemp -d)"
           cp out/build-log-tail.txt out/status.txt "$TMP/" 2>/dev/null
           cp out/build-info.txt "$TMP/" 2>/dev/null
+          cp out/P3P-unsigned.ipa "$TMP/" 2>/dev/null
           git config user.name "p3p-ci"
           git config user.email "p3p-ci@users.noreply.github.com"
           git checkout -q --orphan ci-logs-new
