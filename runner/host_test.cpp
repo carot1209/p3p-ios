@@ -6,7 +6,7 @@
 //   p3p_host_test --elf eboot.elf --iso game.iso --data <dir> --seconds 60
 //                 [--frames <dir> --frame-every 2] [--wav out.wav]
 //                 [--press <second>:<BUTTONS>:<duration s>]... [--save-slot N] [--no-skip-movies]
-//                 [--gpu soft [--trace file --trace-at <guest second>... --trace-frames N]]
+//                 [--gpu soft|null [--trace file --trace-at <guest second>... --trace-frames N]]
 #include "live_runner.hpp"
 #include "soft_backend.hpp"
 
@@ -20,6 +20,22 @@
 #include <vector>
 
 namespace {
+// Draws nothing: measures the CPU cost of the GPU front end alone.
+struct NullBackend final : p3pios::gpu::Backend {
+    const char *name() const override { return "null"; }
+    void create_texture(std::uint32_t, std::uint32_t, std::uint32_t, const std::uint32_t *) override {}
+    void destroy_texture(std::uint32_t) override {}
+    void create_target(std::uint32_t) override {}
+    void create_depth(std::uint32_t) override {}
+    void upload_target(std::uint32_t, const std::uint32_t *) override {}
+    void draw(const p3pios::gpu::State &, const p3pios::gpu::Vertex *, std::uint32_t) override {}
+    bool read_target(std::uint32_t, std::uint32_t *rgba) override {
+        std::memset(rgba, 0x40, p3pios::kScreenWidth * p3pios::kScreenHeight * 4u);
+        return true;
+    }
+    void flush() override {}
+};
+
 struct Press { double at, duration; std::uint32_t buttons; };
 
 std::uint32_t parse_buttons(const std::string &text) {
@@ -79,8 +95,10 @@ int main(int argc, char **argv) {
         else if (a == "--no-skip-movies") config.skip_movies = false;
         else if (a == "--gpu") {
             // The GPU front end on the CPU reference back end (the Metal one only exists on Apple systems).
-            if (value() != "soft") { std::fprintf(stderr, "--gpu soft\n"); return 2; }
-            config.make_gpu_backend = [](std::string &) { return p3pios::gpu::make_soft_backend(); };
+            const std::string kind = value();
+            if (kind == "soft") config.make_gpu_backend = [](std::string &) { return p3pios::gpu::make_soft_backend(); };
+            else if (kind == "null") config.make_gpu_backend = [](std::string &) -> std::unique_ptr<p3pios::gpu::Backend> { return std::make_unique<NullBackend>(); };
+            else { std::fprintf(stderr, "--gpu soft|null\n"); return 2; }
         }
         else if (a == "--trace") config.trace_path = value();
         else if (a == "--trace-at") config.trace_at.push_back(std::stod(value()));

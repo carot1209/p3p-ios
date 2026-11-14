@@ -34,3 +34,11 @@ Log rút gọn của lần build gần nhất được đẩy lên nhánh `ci-lo
 - Chưa có video mở đầu (tự bỏ qua).
 - Dựng hình bằng CPU ở độ phân giải gốc PSP 480×272.
 - Upstream mới kiểm chứng vài ngày đầu của game và trận đầu tiên.
+
+## Dựng hình bằng GPU (Metal)
+
+- `gpu/hw_renderer.cpp`: phần đầu (portable) biến lệnh vẽ GE thành tam giác trong không gian màn hình, theo thiết kế renderer New 3DS của upstream.
+- `gpu/metal_backend.mm`: phần cuối Metal dùng trong app. `gpu/soft_backend.cpp`: bản tham chiếu chạy CPU, chỉ để test.
+- App dùng Metal mặc định; tạo file rỗng `cpu-renderer.txt` trong thư mục của app để quay về dựng hình bằng CPU.
+- Test: `p3p_host_test --gpu soft --trace ...` ghi lệnh GPU của game thật; job `metal-test` trên CI phát lại `tests/gpu_trace.bin.gz` bằng Metal, so với bản tham chiếu và đẩy ảnh lên nhánh `ci-metal`.
+- `tests/gpu_trace.bin.gz` chứa texture của game: thêm một lý do repo phải để private.
