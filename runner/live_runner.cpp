@@ -158,6 +158,51 @@ private:
     std::uint64_t flushed_{0}, buffers_{0}, late_frames_{0}, nonzero_{0}, clipped_{0};
 };
 
+// The reference rasterizer, plus a record of who wrote each framebuffer last:
+// the GE (a rendered frame) or the CPU (a movie frame, a block transfer).
+// Same rule as the New 3DS renderer's last_present_from_cpu().
+class TrackingRenderer final : public p3p3ds::ge::GeRenderer {
+public:
+    void draw(psprecomp::GuestMemory &memory, const p3p3ds::ge::GeRegisters &regs, p3p3ds::ge::Prim prim, std::uint32_t count,
+              std::uint32_t vertex_address, std::uint32_t index_address) override {
+        inner_.draw(memory, regs, prim, count, vertex_address, index_address);
+        target(0x04000000u | (regs.reg[0x9C] & 0x1FFFF0u)).gpu_seq = ++seq_;
+    }
+    void transfer(psprecomp::GuestMemory &memory, const p3p3ds::ge::GeRegisters &regs) override {
+        inner_.transfer(memory, regs);
+        note_cpu_write((regs.reg[0xB4] & 0xFFFFF0u) | ((regs.reg[0xB5] >> 16) & 0xFFu) << 24);
+    }
+    void sync() override { inner_.sync(); }
+    void drain() override { inner_.drain(); }
+    [[nodiscard]] const p3p3ds::ge::DrawStats &stats() const override { return inner_.stats(); }
+
+    void note_cpu_write(std::uint32_t address) {
+        const std::uint32_t a = psprecomp::GuestMemory::canonical(address);
+        for (auto &t : targets_)
+            if (a >= t.base && a < t.base + kTargetBytes) { t.cpu_seq = ++seq_; return; }
+    }
+    // The displayed picture was written by the CPU last (or never drawn by the GE).
+    bool shown_from_cpu(std::uint32_t topaddr) {
+        const Target &t = target(topaddr);
+        return t.gpu_seq <= t.cpu_seq;
+    }
+
+private:
+    static constexpr std::uint32_t kTargetBytes = 512u * 272u * 4u;
+    struct Target { std::uint32_t base{}; std::uint64_t gpu_seq{}, cpu_seq{}; };
+    Target &target(std::uint32_t address) {
+        const std::uint32_t base = psprecomp::GuestMemory::canonical(address);
+        for (auto &t : targets_)
+            if (t.base == base) return t;
+        if (targets_.size() >= 16u) targets_.erase(targets_.begin());
+        targets_.push_back({base, 0u, 0u});
+        return targets_.back();
+    }
+    p3p3ds::ge::SoftwareRenderer inner_;
+    std::vector<Target> targets_;
+    std::uint64_t seq_{0};
+};
+
 struct PadSource final : p3p3ds::input::InputSource {
     p3p3ds::input::PadState pad;
     p3p3ds::input::PadState sample(std::uint64_t) override { return pad; }
@@ -204,8 +249,7 @@ struct LiveRunner::Impl {
     std::string report_text;
 
     // game thread state
-    std::uint64_t cpu_fb_bytes{0};     // CPU stores into the displayed framebuffer since the last vblank
-    std::uint32_t fb_base{0}, fb_end{0}; // canonical range of the displayed framebuffer
+    TrackingRenderer *tracker{nullptr};
 
     static void *thread_main(void *arg) {
         static_cast<Impl *>(arg)->run();
@@ -358,9 +402,12 @@ struct LiveRunner::Impl {
             kernel.audio().set_sink([this](unsigned, std::uint64_t start, const std::vector<std::int16_t> &stereo) { mixer.add(start, stereo); });
             // CPU stores into the displayed framebuffer: a movie frame (the GE
             // rasterizer writes through raw pointers and is not seen here).
-            rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t bytes) {
-                if (address >= fb_base && address < fb_end) cpu_fb_bytes += bytes;
-            };
+            {
+                auto renderer = std::make_unique<TrackingRenderer>();
+                tracker = renderer.get();
+                kernel.ge().set_renderer(std::move(renderer));
+            }
+            rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) { tracker->note_cpu_write(address); };
 
             stage = "run";
             set_stage(stage);
@@ -408,11 +455,7 @@ struct LiveRunner::Impl {
 
                 // Movies: no video decoder yet (pictures are black), so START is
                 // pressed for the game while it shows CPU-written movie frames.
-                const std::uint32_t fb_bytes = static_cast<std::uint32_t>(std::max(fb.bufferwidth, 1)) * kScreenHeight * (fb.pixelformat == 3 ? 4u : 2u);
-                const bool cpu_frame = cpu_fb_bytes >= fb_bytes / 2u;
-                cpu_fb_bytes = 0;
-                fb_base = psprecomp::GuestMemory::canonical(fb.topaddr);
-                fb_end = fb_base + fb_bytes;
+                const bool cpu_frame = fb.active && fb.topaddr != 0u && tracker->shown_from_cpu(fb.topaddr);
                 if (config.skip_movies) {
                     std::uint64_t decoded = 0;
                     for (const auto &[handle, inst] : kernel.mpeg().instances) decoded += inst.video_decoded;
@@ -534,6 +577,7 @@ struct LiveRunner::Impl {
             state.stage = stage;
             state.stop_reason = !fatal.empty() ? fatal : (rt_owner && rt_owner->stopped() ? rt_owner->stop_reason() : std::string("stopped"));
         }
+        tracker = nullptr;
         if (kernel_owner) kernel_owner->display().on_vblank = {};
         p3p3ds::install_interpreter_fallback(nullptr);
         kernel_owner.reset();
