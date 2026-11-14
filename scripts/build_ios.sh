@@ -54,6 +54,10 @@ python3 "$UP/tools/cwcheat_patches.py" "$UP/p3p/p3p-patches/ULUS10512.ini" "$UP/
 "$BUILD/psp_recomp" "$ELF" --auto "$GEN" 0x08804000 16384 "$BUILD/gen/patches.txt" --no-transfer-records | tail -8
 python3 "$UP/tools/verify_aot_layout.py" "$GEN" 237 16384
 
+echo "== ffmpeg (movie decoder)"
+FFMPEG="${P3P_FFMPEG_PREFIX:-$BUILD/ffmpeg-ios}"
+"$ROOT/scripts/build_ffmpeg.sh" ios "$FFMPEG"
+
 # The AOT archive only changes with the EBOOT, the upstream revision and the
 # compiler flags: reuse it when all three are the same.
 KEY="$(cat "$ELF" "$ROOT/scripts/gen_make.py" "$ROOT/upstream.ref" | shasum -a 256 | cut -c1-16)"
@@ -61,10 +65,10 @@ ARCHIVE="$CACHE/libp3p_aot-$KEY.a"
 IOS="$BUILD/ios"
 if [ -f "$ARCHIVE" ]; then
     echo "== AOT archive from cache ($KEY)"
-    python3 "$ROOT/scripts/gen_make.py" --target ios --upstream "$UP" --gen "$GEN" --out "$IOS" --build-id "$BUILD_ID" --aot-archive "$ARCHIVE"
+    python3 "$ROOT/scripts/gen_make.py" --target ios --upstream "$UP" --gen "$GEN" --out "$IOS" --build-id "$BUILD_ID" --aot-archive "$ARCHIVE" --ffmpeg "$FFMPEG"
 else
     echo "== AOT archive will be compiled ($KEY)"
-    python3 "$ROOT/scripts/gen_make.py" --target ios --upstream "$UP" --gen "$GEN" --out "$IOS" --build-id "$BUILD_ID"
+    python3 "$ROOT/scripts/gen_make.py" --target ios --upstream "$UP" --gen "$GEN" --out "$IOS" --build-id "$BUILD_ID" --ffmpeg "$FFMPEG"
 fi
 
 echo "== compile ($JOBS jobs)"

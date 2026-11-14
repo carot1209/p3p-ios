@@ -32,7 +32,8 @@ struct Config {
     std::string iso_path;    // the user's ULUS-10512 image
     std::string data_dir;    // writable: ms0/ (saves), mods/, report.txt
     std::string build_id;
-    bool skip_movies{true};  // press START for the game while a movie plays (no video decoder yet)
+    bool skip_movies{true};  // without a video decoder: press START for the game while a movie plays
+    bool decode_movies{true}; // FFmpeg decoder for PSMF movies (when built with P3P_HAVE_FFMPEG)
     bool quiet{true};        // discard the runtime's std::cout diagnostics
     // GPU renderer: called once on the game thread. Without it, or when it
     // returns nullptr (`error` says why), the CPU renderer draws.

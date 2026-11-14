@@ -2,6 +2,9 @@
 
 #include "hw_renderer.hpp"
 #include "trace.hpp"
+#ifdef P3P_HAVE_FFMPEG
+#include "ffmpeg_decoder.hpp"
+#endif
 
 #include "p3p3ds/ge/renderer.hpp"
 #include "p3p3ds/hle/hle_modules.hpp"
@@ -257,6 +260,10 @@ struct LiveRunner::Impl {
     gpu::HwRenderer *hw{nullptr};        // GPU renderer (one of the two is set)
     gpu::TraceBackend *tracer{nullptr};
     std::string renderer_name{"-"};
+    bool movies_decoded{false};
+#ifdef P3P_HAVE_FFMPEG
+    std::shared_ptr<MovieStats> movie_stats = std::make_shared<MovieStats>();
+#endif
     std::vector<std::uint32_t> hw_frame = std::vector<std::uint32_t>(kScreenWidth * kScreenHeight, 0);
 
     bool shown_from_cpu(std::uint32_t topaddr) { return hw != nullptr ? hw->shown_from_cpu(topaddr) : tracker->shown_from_cpu(topaddr); }
@@ -383,6 +390,16 @@ struct LiveRunner::Impl {
                           rt_owner && rt_owner->stopped() ? rt_owner->stop_reason().c_str() : "-", fatal.empty() ? "-" : fatal.c_str());
             std::string text(buf);
             text += "render : " + renderer_name + "\n";
+#ifdef P3P_HAVE_FFMPEG
+            if (movies_decoded) {
+                const auto &mv = *movie_stats;
+                std::snprintf(buf, sizeof buf, "video  : ffmpeg, %llu video AUs, %llu pictures %ux%u, %llu errors; %llu audio AUs, %llu errors\n",
+                              static_cast<unsigned long long>(mv.video_aus), static_cast<unsigned long long>(mv.pictures), mv.width, mv.height,
+                              static_cast<unsigned long long>(mv.video_errors), static_cast<unsigned long long>(mv.audio_aus),
+                              static_cast<unsigned long long>(mv.audio_errors));
+                text += buf;
+            }
+#endif
             if (hw != nullptr) {
                 const auto &h = hw->hw_stats();
                 std::snprintf(buf, sizeof buf,
@@ -478,6 +495,20 @@ struct LiveRunner::Impl {
                 std::lock_guard<std::mutex> lock(status_mutex);
                 state.renderer = renderer_name;
             }
+#ifdef P3P_HAVE_FFMPEG
+            if (config.decode_movies) {
+                kernel.mpeg().decoder = make_ffmpeg_decoder(
+                    [this](std::uint32_t address, std::uint32_t bytes) {
+                        // Movie pictures go through raw pointers: tell the renderer.
+                        for (std::uint32_t at = 0; at < bytes; at += 4096u) {
+                            if (hw != nullptr) hw->note_cpu_write(address + at);
+                            else if (tracker != nullptr) tracker->note_cpu_write(address + at);
+                        }
+                    },
+                    movie_stats);
+                movies_decoded = true;
+            }
+#endif
             rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) {
                 if (hw != nullptr) hw->note_cpu_write(address);
                 else tracker->note_cpu_write(address);
@@ -533,7 +564,7 @@ struct LiveRunner::Impl {
                 // Movies: no video decoder yet (pictures are black), so START is
                 // pressed for the game while it shows CPU-written movie frames.
                 const bool cpu_frame = fb.active && fb.topaddr != 0u && shown_from_cpu(fb.topaddr);
-                if (config.skip_movies) {
+                if (config.skip_movies && !movies_decoded) {
                     std::uint64_t decoded = 0;
                     for (const auto &[handle, inst] : kernel.mpeg().instances) decoded += inst.video_decoded;
                     if (decoded != movie_frames_seen && cpu_frame) {
