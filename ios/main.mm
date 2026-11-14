@@ -12,10 +12,12 @@
 #import <UIKit/UIKit.h>
 
 #include "live_runner.hpp"
+#include "metal_backend.hpp"
 
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -326,7 +328,9 @@ struct P3PButton {
     // The Files app shows the app's folder once it holds something.
     NSString *note = [[self documentsPath] stringByAppendingPathComponent:@"HUONG-DAN.txt"];
     NSString *text = @"Chep file ISO Persona 3 Portable (ULUS-10512) cua ban vao thu muc nay, roi mo lai app.\n"
-                     @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n";
+                     @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
+                     @"Hinh ve bang GPU (Metal). Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay\n"
+                     @"roi mo lai app de ve bang CPU (cham hon).\n";
     [text writeToFile:note atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
     _audio = [[P3PAudio alloc] init];
@@ -367,6 +371,10 @@ struct P3PButton {
     config.iso_path = iso.UTF8String;
     config.data_dir = [self documentsPath].UTF8String;
     config.build_id = P3P_BUILD_ID;
+    // The GPU (Metal) draws unless the user put cpu-renderer.txt next to the ISO.
+    std::error_code ec;
+    if (!std::filesystem::exists(config.data_dir + "/cpu-renderer.txt", ec))
+        config.make_gpu_backend = [](std::string &error) { return p3pios::gpu::make_metal_backend(error); };
     _runner = std::make_unique<p3pios::LiveRunner>();
     std::string error;
     if (!_runner->start(config, error)) {
@@ -462,7 +470,8 @@ struct P3PButton {
     }
     if (_ticks % 30u == 0u) {
         const p3pios::Status status = _runner->status();
-        _statusLabel.text = [NSString stringWithFormat:@"%.0f fps  %.0f%%  %s", status.fps, status.speed * 100.0, P3P_BUILD_ID];
+        _statusLabel.text = [NSString stringWithFormat:@"%.0f fps  %.0f%%  %s  %s", status.fps, status.speed * 100.0,
+                                                       status.renderer.rfind("gpu", 0) == 0 ? "GPU" : "CPU", P3P_BUILD_ID];
         if (status.finished && !_reportedEnd) {
             _reportedEnd = YES;
             const std::string report = _runner->report();

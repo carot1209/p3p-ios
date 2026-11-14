@@ -5,9 +5,12 @@
 // state. Used by the iOS shell (ios/main.mm) and by the headless host test
 // (runner/host_test.cpp), so everything except the UI code is exercised off
 // the device.
+#include "gpu_backend.hpp"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +34,14 @@ struct Config {
     std::string build_id;
     bool skip_movies{true};  // press START for the game while a movie plays (no video decoder yet)
     bool quiet{true};        // discard the runtime's std::cout diagnostics
+    // GPU renderer: called once on the game thread. Without it, or when it
+    // returns nullptr (`error` says why), the CPU renderer draws.
+    std::function<std::unique_ptr<gpu::Backend>(std::string &error)> make_gpu_backend;
+    // Test hook: at each of these guest times (seconds) append a window of
+    // `trace_frames` pictures of GPU back-end calls to `trace_path` (gpu/trace.hpp).
+    std::string trace_path;
+    std::vector<double> trace_at;
+    std::uint32_t trace_frames{3};
 };
 
 struct SaveSlot {
@@ -48,7 +59,7 @@ struct Status {
     bool running{}, finished{};
     double fps{}, speed{};    // game frames per second; guest time / wall time over the last second
     std::uint64_t vblanks{}, audio_underruns{};
-    std::string stage, stop_reason;
+    std::string stage, stop_reason, renderer;
 };
 
 class LiveRunner {

@@ -1,5 +1,8 @@
 #include "live_runner.hpp"
 
+#include "hw_renderer.hpp"
+#include "trace.hpp"
+
 #include "p3p3ds/ge/renderer.hpp"
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/input.hpp"
@@ -250,7 +253,13 @@ struct LiveRunner::Impl {
     std::string report_text;
 
     // game thread state
-    TrackingRenderer *tracker{nullptr};
+    TrackingRenderer *tracker{nullptr};  // CPU renderer
+    gpu::HwRenderer *hw{nullptr};        // GPU renderer (one of the two is set)
+    gpu::TraceBackend *tracer{nullptr};
+    std::string renderer_name{"-"};
+    std::vector<std::uint32_t> hw_frame = std::vector<std::uint32_t>(kScreenWidth * kScreenHeight, 0);
+
+    bool shown_from_cpu(std::uint32_t topaddr) { return hw != nullptr ? hw->shown_from_cpu(topaddr) : tracker->shown_from_cpu(topaddr); }
 
     static void *thread_main(void *arg) {
         static_cast<Impl *>(arg)->run();
@@ -276,6 +285,19 @@ struct LiveRunner::Impl {
     }
 
     void present(const psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb) {
+        if (hw != nullptr) {
+            // A GPU picture is read back when it is new; a CPU-written one
+            // (movie frame) is converted from guest memory below.
+            const bool fresh = hw->read_display(fb, hw_frame.data());
+            if (fb.active && fb.topaddr != 0u && !hw->shown_from_cpu(fb.topaddr)) {
+                if (fresh) {
+                    std::lock_guard<std::mutex> lock(frame_mutex);
+                    std::memcpy(frame.data(), hw_frame.data(), frame.size());
+                    ++frame_serial;
+                }
+                return;
+            }
+        }
         if (!fb.active) return;
         const std::uint32_t format = static_cast<std::uint32_t>(fb.pixelformat);
         const std::uint32_t bpp = format == 3u ? 4u : 2u;
@@ -352,7 +374,21 @@ struct LiveRunner::Impl {
                           static_cast<unsigned long long>(movie_presses),
                           std::filesystem::path(config.iso_path).filename().string().c_str(),
                           rt_owner && rt_owner->stopped() ? rt_owner->stop_reason().c_str() : "-", fatal.empty() ? "-" : fatal.c_str());
-            return std::string(buf);
+            std::string text(buf);
+            text += "render : " + renderer_name + "\n";
+            if (hw != nullptr) {
+                const auto &h = hw->hw_stats();
+                std::snprintf(buf, sizeof buf,
+                              "gpu    : %llu draws in %llu batches, %llu triangles, %llu skipped; %llu uploads, %llu readbacks, %llu writebacks\n"
+                              "         textures: %u live, %llu created, %llu target-as-texture; %u targets\n",
+                              static_cast<unsigned long long>(h.draws), static_cast<unsigned long long>(h.batches),
+                              static_cast<unsigned long long>(h.triangles), static_cast<unsigned long long>(h.skipped),
+                              static_cast<unsigned long long>(h.uploads), static_cast<unsigned long long>(h.readbacks),
+                              static_cast<unsigned long long>(h.writebacks), h.textures, static_cast<unsigned long long>(h.texture_creates),
+                              static_cast<unsigned long long>(h.target_textures), h.targets);
+                text += buf;
+            }
+            return text;
         };
 
         try {
@@ -413,11 +449,32 @@ struct LiveRunner::Impl {
             // CPU stores into the displayed framebuffer: a movie frame (the GE
             // rasterizer writes through raw pointers and is not seen here).
             {
-                auto renderer = std::make_unique<TrackingRenderer>();
-                tracker = renderer.get();
-                kernel.ge().set_renderer(std::move(renderer));
+                std::unique_ptr<gpu::Backend> backend;
+                std::string gpu_error;
+                if (config.make_gpu_backend) backend = config.make_gpu_backend(gpu_error);
+                if (backend) {
+                    renderer_name = std::string("gpu (") + backend->name() + ")";
+                    if (!config.trace_path.empty()) {
+                        auto trace = std::make_unique<gpu::TraceBackend>(std::move(backend));
+                        tracer = trace.get();
+                        backend = std::move(trace);
+                    }
+                    auto renderer = std::make_unique<gpu::HwRenderer>(std::move(backend));
+                    hw = renderer.get();
+                    kernel.ge().set_renderer(std::move(renderer));
+                } else {
+                    renderer_name = gpu_error.empty() ? std::string("cpu") : "cpu (no gpu: " + gpu_error + ")";
+                    auto renderer = std::make_unique<TrackingRenderer>();
+                    tracker = renderer.get();
+                    kernel.ge().set_renderer(std::move(renderer));
+                }
+                std::lock_guard<std::mutex> lock(status_mutex);
+                state.renderer = renderer_name;
             }
-            rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) { tracker->note_cpu_write(address); };
+            rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) {
+                if (hw != nullptr) hw->note_cpu_write(address);
+                else tracker->note_cpu_write(address);
+            };
 
             psprecomp::runtime_profile().enabled = true;
             p3p3ds::host_profile().enabled = true;
@@ -442,6 +499,7 @@ struct LiveRunner::Impl {
             const hle::SavedataDialog *dialog_shown = nullptr;
             std::uint64_t dialog_serial = 0;
             bool suppress_input = false;
+            std::size_t trace_next = 0;
 
             kernel.display().on_vblank = [&](const hle::DisplayFramebufInfo &fb) {
                 const auto vblank = kernel.threads().vblank_count();
@@ -467,7 +525,7 @@ struct LiveRunner::Impl {
 
                 // Movies: no video decoder yet (pictures are black), so START is
                 // pressed for the game while it shows CPU-written movie frames.
-                const bool cpu_frame = fb.active && fb.topaddr != 0u && tracker->shown_from_cpu(fb.topaddr);
+                const bool cpu_frame = fb.active && fb.topaddr != 0u && shown_from_cpu(fb.topaddr);
                 if (config.skip_movies) {
                     std::uint64_t decoded = 0;
                     for (const auto &[handle, inst] : kernel.mpeg().instances) decoded += inst.video_decoded;
@@ -532,6 +590,11 @@ struct LiveRunner::Impl {
                 // Audio up to the guest clock's now.
                 const std::uint64_t now_us = kernel.threads().now();
                 mixer.release_until(now_us, ring);
+                if (tracer != nullptr && !tracer->recording() && trace_next < config.trace_at.size() &&
+                    static_cast<double>(now_us) / 1e6 >= config.trace_at[trace_next]) {
+                    tracer->record(config.trace_path, config.trace_frames);
+                    ++trace_next;
+                }
 
                 // Real-time pacing: the guest clock may not run ahead of the wall
                 // clock; when it falls behind, the reference moves instead of racing.
@@ -593,10 +656,13 @@ struct LiveRunner::Impl {
             state.stage = stage;
             state.stop_reason = !fatal.empty() ? fatal : (rt_owner && rt_owner->stopped() ? rt_owner->stop_reason() : std::string("stopped"));
         }
-        tracker = nullptr;
         if (kernel_owner) kernel_owner->display().on_vblank = {};
+        if (rt_owner) rt_owner->memory().vram_write_observer = {};
         p3p3ds::install_interpreter_fallback(nullptr);
-        kernel_owner.reset();
+        kernel_owner.reset(); // the renderer goes with it
+        tracker = nullptr;
+        hw = nullptr;
+        tracer = nullptr;
         rt_owner.reset();
         finished.store(true);
     }

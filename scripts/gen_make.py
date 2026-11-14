@@ -57,13 +57,15 @@ def main():
     aot = sorted(os.path.join(gen, n) for n in os.listdir(gen) if n.endswith(".cpp"))
     if len(aot) < 2:
         sys.exit(f"no generated AOT sources in {gen}")
-    runner = [os.path.join(ROOT, "runner", "live_runner.cpp")]
+    runner = [os.path.join(ROOT, "runner", "live_runner.cpp"), os.path.join(ROOT, "gpu", "hw_renderer.cpp"),
+              os.path.join(ROOT, "gpu", "trace.cpp")]
 
     includes = [
         os.path.join(up, "core", "include"),
         os.path.join(up, "recomp", "PSPRecomp", "include"),
         os.path.join(up, "profiles", "p3p", "config"),
         os.path.join(ROOT, "runner"),
+        os.path.join(ROOT, "gpu"),
     ]
     common = ["-std=c++20", "-O2", "-fno-strict-aliasing"] + ["-D" + d for d in DEFINES] + ["-I" + i for i in includes]
     common.append('-DP3P_BUILD_ID=\\"' + args.build_id + '\\"')
@@ -76,12 +78,13 @@ def main():
         ldflags += platform + ["-framework", "UIKit", "-framework", "Foundation", "-framework", "QuartzCore",
                                "-framework", "CoreGraphics", "-framework", "AudioToolbox", "-framework", "AVFoundation", "-lobjc"]
         objc_flags = ["-fobjc-arc"]
-        main_sources = [os.path.join(ROOT, "ios", "main.mm")]
+        ldflags += ["-framework", "Metal"]
+        main_sources = [os.path.join(ROOT, "ios", "main.mm"), os.path.join(ROOT, "gpu", "metal_backend.mm")]
         product = "P3P"
     else:
         cxx = args.cxx or os.environ.get("CXX", "c++")
         ldflags += ["-pthread"]
-        main_sources = [os.path.join(ROOT, "runner", "host_test.cpp")]
+        main_sources = [os.path.join(ROOT, "runner", "host_test.cpp"), os.path.join(ROOT, "gpu", "soft_backend.cpp")]
         product = "p3p_host_test"
 
     groups = [("rt", runtime, []), ("core", core, []), ("aot", aot, ["-I" + gen]), ("runner", runner, []),

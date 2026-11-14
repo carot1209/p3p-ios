@@ -6,7 +6,9 @@
 //   p3p_host_test --elf eboot.elf --iso game.iso --data <dir> --seconds 60
 //                 [--frames <dir> --frame-every 2] [--wav out.wav]
 //                 [--press <second>:<BUTTONS>:<duration s>]... [--save-slot N] [--no-skip-movies]
+//                 [--gpu soft [--trace file --trace-at <guest second>... --trace-frames N]]
 #include "live_runner.hpp"
+#include "soft_backend.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -75,6 +77,14 @@ int main(int argc, char **argv) {
         else if (a == "--wav") wav_path = value();
         else if (a == "--save-slot") save_slot = std::stoi(value());
         else if (a == "--no-skip-movies") config.skip_movies = false;
+        else if (a == "--gpu") {
+            // The GPU front end on the CPU reference back end (the Metal one only exists on Apple systems).
+            if (value() != "soft") { std::fprintf(stderr, "--gpu soft\n"); return 2; }
+            config.make_gpu_backend = [](std::string &) { return p3pios::gpu::make_soft_backend(); };
+        }
+        else if (a == "--trace") config.trace_path = value();
+        else if (a == "--trace-at") config.trace_at.push_back(std::stod(value()));
+        else if (a == "--trace-frames") config.trace_frames = static_cast<std::uint32_t>(std::stoul(value()));
         else if (a == "--press") {
             const std::string v = value();
             const auto c1 = v.find(':'), c2 = v.find(':', c1 + 1);
