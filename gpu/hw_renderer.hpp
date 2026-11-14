@@ -51,13 +51,18 @@ public:
     // kViewHeight, bytes R,G,B,A) and returns true.
     bool read_display(const p3p3ds::hle::DisplayFramebufInfo &fb, std::uint32_t *rgba);
 
+    // Once per vblank: shows the displayed framebuffer on the back end's display
+    // surface (a CPU-written picture is uploaded first). True when a new picture
+    // was shown; false when it is the one already there or there is no surface.
+    bool present_display(psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb);
+
     [[nodiscard]] const HwStats &hw_stats() const { return hw_stats_; }
     [[nodiscard]] Backend &backend() { return *backend_; }
 
 private:
     struct Target {
         std::uint32_t address{}, format{}, stride{512}, id{};
-        std::uint64_t gpu_seq{}, cpu_seq{};
+        std::uint64_t gpu_seq{}, cpu_seq{}, uploaded_seq{};
     };
     struct CachedTexture {
         std::uint32_t id{}, width{}, height{};
@@ -93,7 +98,8 @@ private:
     std::uint32_t fast_texture_key_{};
     std::vector<p3p3ds::ge::ScreenVertex> screen_;
     std::vector<std::uint32_t> pixels_;
-    std::uint32_t shown_target_{};
+    std::uint32_t shown_target_{}, shown_present_target_{};
+    std::uint64_t shown_present_version_{~0ull};
     std::uint64_t shown_seq_{~0ull};
 };
 

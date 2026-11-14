@@ -14,9 +14,12 @@ rm -rf "$OUT"; mkdir -p "$OUT"
     echo "== build"
     xcrun clang++ -std=c++20 -O2 -fobjc-arc -DP3P_HAVE_METAL -I"$ROOT/gpu" \
         "$ROOT/gpu/replay_main.cpp" "$ROOT/gpu/trace.cpp" "$ROOT/gpu/soft_backend.cpp" "$ROOT/gpu/metal_backend.mm" \
-        -framework Metal -framework Foundation -framework CoreGraphics -o "$OUT/gpu_replay" || exit 1
+        -framework Metal -framework QuartzCore -framework Foundation -framework CoreGraphics -o "$OUT/gpu_replay" || exit 1
     echo "== replay"
     "$OUT/gpu_replay" "$OUT/trace.bin" "$OUT" soft metal
+    echo "exit code: $?"
+    echo "== replay at 3x (read back as block means; edges differ a little from 1x)"
+    "$OUT/gpu_replay" "$OUT/trace.bin" "$OUT" soft metal3
     echo "exit code: $?"
 } 2>&1 | tee "$OUT/result.txt"
 for f in "$OUT"/*.bmp; do

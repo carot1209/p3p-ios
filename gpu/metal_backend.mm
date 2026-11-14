@@ -8,6 +8,7 @@
 // the shader source is compiled at start.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #include "metal_backend.hpp"
 
@@ -101,6 +102,7 @@ static_assert(sizeof(Uniforms) == 48);
 
 constexpr NSUInteger kVertexBufferBytes = 1u << 20;
 constexpr NSUInteger kViewBytes = kViewWidth * kViewHeight * 4u;
+constexpr std::uint32_t kNoDepth = 1u << 20, kBgra = 1u << 21; // pipeline key bits
 
 // Vertex buffers whose command buffers have completed.
 struct BufferPool {
@@ -176,8 +178,10 @@ public:
         }
     }
 
-    bool init(std::string &error) {
+    bool init(std::string &error, void *layer, int scale) {
         @autoreleasepool {
+            scale_ = static_cast<std::uint32_t>(std::clamp(scale, 1, 4));
+            size_ = kTargetSize * scale_;
             device_ = MTLCreateSystemDefaultDevice();
 #if TARGET_OS_OSX
             if (device_ == nil) device_ = MTLCopyAllDevices().firstObject; // command-line tools without Core Graphics
@@ -218,17 +222,25 @@ public:
             }
             const std::uint32_t white = 0xFFFFFFFFu;
             white_ = new_texture(1, 1, &white);
-            readback_ = [device_ newBufferWithLength:kViewBytes options:MTLResourceStorageModeShared];
+            readback_ = [device_ newBufferWithLength:kViewBytes * scale_ * scale_ options:MTLResourceStorageModeShared];
+            if (layer != nullptr) {
+                layer_ = (__bridge CAMetalLayer *)layer;
+                layer_.device = device_;
+                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+                layer_.framebufferOnly = YES;
+                layer_.maximumDrawableCount = 3;
+            }
             if (white_ == nil || readback_ == nil) { error = "cannot allocate GPU memory"; return false; }
             pool_ = std::make_shared<BufferPool>();
             // Builds the pipeline every 2D draw starts with: a shader that does
             // not fit this GPU fails here instead of in the middle of the game.
-            if (pipeline(7u << 12) == nil) { error = "pipeline: " + pipeline_error_; return false; }
+            if (pipeline(15u << 12) == nil || pipeline((15u << 12) | kNoDepth | kBgra) == nil) { error = "pipeline: " + pipeline_error_; return false; }
             return true;
         }
     }
 
     const char *name() const override { return name_.c_str(); }
+    std::uint32_t scale() const { return scale_; }
 
     void create_texture(std::uint32_t ident, std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba) override {
         @autoreleasepool {
@@ -245,8 +257,8 @@ public:
     void create_target(std::uint32_t ident) override {
         @autoreleasepool {
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                         width:kTargetSize
-                                                                                        height:kTargetSize
+                                                                                         width:size_
+                                                                                        height:size_
                                                                                      mipmapped:NO];
             d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             d.storageMode = MTLStorageModePrivate;
@@ -260,8 +272,8 @@ public:
     void create_depth(std::uint32_t ident) override {
         @autoreleasepool {
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
-                                                                                         width:kTargetSize
-                                                                                        height:kTargetSize
+                                                                                         width:size_
+                                                                                        height:size_
                                                                                      mipmapped:NO];
             d.usage = MTLTextureUsageRenderTarget;
             d.storageMode = MTLStorageModePrivate;
@@ -280,17 +292,23 @@ public:
             if (staging == nil) return;
             end_encoder();
             clear_if_fresh(ident);
-            id<MTLBlitCommandEncoder> blit = [command_buffer() blitCommandEncoder];
-            [blit copyFromTexture:staging
-                      sourceSlice:0
-                      sourceLevel:0
-                     sourceOrigin:MTLOriginMake(0, 0, 0)
-                       sourceSize:MTLSizeMake(kViewWidth, kViewHeight, 1)
-                        toTexture:it->second
-                 destinationSlice:0
-                 destinationLevel:0
-                destinationOrigin:MTLOriginMake(0, 0, 0)];
-            [blit endEncoding];
+            if (scale_ == 1u) {
+                id<MTLBlitCommandEncoder> blit = [command_buffer() blitCommandEncoder];
+                [blit copyFromTexture:staging
+                          sourceSlice:0
+                          sourceLevel:0
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(kViewWidth, kViewHeight, 1)
+                            toTexture:it->second
+                     destinationSlice:0
+                     destinationLevel:0
+                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit endEncoding];
+                return;
+            }
+            // Scaled targets: draw the picture over the 480 x 272 area, smoothed.
+            ensure_encoder(ident, 0);
+            encode_quad(staging, 1.0f, 1.0f, false);
         }
     }
 
@@ -342,10 +360,10 @@ public:
                                           (static_cast<std::uint64_t>(st.sx2) << 32) | (static_cast<std::uint64_t>(st.sy2) << 48);
             if (!bound_.scissor_valid || bound_.scissor != scissor) {
                 MTLScissorRect rect;
-                rect.x = std::min<NSUInteger>(st.sx1, kTargetSize - 1u);
-                rect.y = std::min<NSUInteger>(st.sy1, kTargetSize - 1u);
-                const NSUInteger x2 = std::min<NSUInteger>(std::max<NSUInteger>(st.sx2, rect.x + 1u), kTargetSize);
-                const NSUInteger y2 = std::min<NSUInteger>(std::max<NSUInteger>(st.sy2, rect.y + 1u), kTargetSize);
+                rect.x = std::min<NSUInteger>(static_cast<NSUInteger>(st.sx1) * scale_, size_ - 1u);
+                rect.y = std::min<NSUInteger>(static_cast<NSUInteger>(st.sy1) * scale_, size_ - 1u);
+                const NSUInteger x2 = std::min<NSUInteger>(std::max<NSUInteger>(static_cast<NSUInteger>(st.sx2) * scale_, rect.x + 1u), size_);
+                const NSUInteger y2 = std::min<NSUInteger>(std::max<NSUInteger>(static_cast<NSUInteger>(st.sy2) * scale_, rect.y + 1u), size_);
                 rect.width = x2 - rect.x;
                 rect.height = y2 - rect.y;
                 [encoder_ setScissorRect:rect];
@@ -404,18 +422,72 @@ public:
             end_encoder();
             clear_if_fresh(ident);
             id<MTLBlitCommandEncoder> blit = [command_buffer() blitCommandEncoder];
+            const NSUInteger w = static_cast<NSUInteger>(kViewWidth) * scale_, h = static_cast<NSUInteger>(kViewHeight) * scale_;
             [blit copyFromTexture:it->second
                              sourceSlice:0
                              sourceLevel:0
                             sourceOrigin:MTLOriginMake(0, 0, 0)
-                              sourceSize:MTLSizeMake(kViewWidth, kViewHeight, 1)
+                              sourceSize:MTLSizeMake(w, h, 1)
                                 toBuffer:readback_
                        destinationOffset:0
-                  destinationBytesPerRow:kViewWidth * 4u
-                destinationBytesPerImage:kViewBytes];
+                  destinationBytesPerRow:w * 4u
+                destinationBytesPerImage:w * h * 4u];
             [blit endEncoding];
             if (!commit(true)) return false;
-            std::memcpy(rgba, readback_.contents, kViewBytes);
+            const auto *src = static_cast<const std::uint8_t *>(readback_.contents);
+            if (scale_ == 1u) {
+                std::memcpy(rgba, src, kViewBytes);
+                return true;
+            }
+            // Back to the PSP's 480 x 272: the mean of each scale x scale block.
+            const std::uint32_t n = scale_ * scale_;
+            for (std::uint32_t y = 0; y < kViewHeight; ++y)
+                for (std::uint32_t x = 0; x < kViewWidth; ++x) {
+                    std::uint32_t sum[4] = {0, 0, 0, 0};
+                    for (std::uint32_t dy = 0; dy < scale_; ++dy) {
+                        const std::uint8_t *row = src + (static_cast<std::size_t>(y * scale_ + dy) * w + static_cast<std::size_t>(x) * scale_) * 4u;
+                        for (std::uint32_t dx = 0; dx < scale_; ++dx)
+                            for (int c = 0; c < 4; ++c) sum[c] += row[dx * 4u + static_cast<std::uint32_t>(c)];
+                    }
+                    rgba[y * kViewWidth + x] = ((sum[0] + n / 2u) / n) | (((sum[1] + n / 2u) / n) << 8) | (((sum[2] + n / 2u) / n) << 16) |
+                                               (((sum[3] + n / 2u) / n) << 24);
+                }
+            return true;
+        }
+    }
+
+    bool present(std::uint32_t ident) override {
+        @autoreleasepool {
+            if (layer_ == nil) return false;
+            const auto it = targets_.find(ident);
+            if (it == targets_.end()) return false;
+            const CGSize size = layer_.drawableSize;
+            if (size.width < 2.0 || size.height < 2.0) return false;
+            end_encoder();
+            clear_if_fresh(ident);
+            id<CAMetalDrawable> drawable = [layer_ nextDrawable];
+            if (drawable == nil) return false;
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = drawable.texture;
+            pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            encoder_ = [command_buffer() renderCommandEncoderWithDescriptor:pass];
+            // Aspect-fit: the viewport maps the 512 x 512 PSP target space so that its
+            // 480 x 272 corner lands centred in the drawable.
+            const double k = std::min(size.width / kViewWidth, size.height / kViewHeight);
+            MTLViewport viewport;
+            viewport.originX = (size.width - kViewWidth * k) * 0.5;
+            viewport.originY = (size.height - kViewHeight * k) * 0.5;
+            viewport.width = kTargetSize * k;
+            viewport.height = kTargetSize * k;
+            viewport.znear = 0.0;
+            viewport.zfar = 1.0;
+            [encoder_ setViewport:viewport];
+            encode_quad(it->second, static_cast<float>(kViewWidth) / kTargetSize, static_cast<float>(kViewHeight) / kTargetSize, true);
+            end_encoder();
+            [command_buffer() presentDrawable:drawable];
+            commit(false);
             return true;
         }
     }
@@ -487,6 +559,7 @@ private:
         id<MTLBuffer> b = pool_->take(wanted);
         if (b == nil) b = [device_ newBufferWithLength:wanted options:MTLResourceStorageModeShared];
         if (b == nil) return false;
+        if (used_buffers_.size() >= 24u) { end_encoder(); commit(false); b = pool_->take(wanted); if (b == nil) b = [device_ newBufferWithLength:wanted options:MTLResourceStorageModeShared]; if (b == nil) return false; }
         used_buffers_.push_back(b);
         vertex_buffer_ = b;
         vertex_used_ = 0;
@@ -516,13 +589,34 @@ private:
         [e endEncoding];
     }
 
+    // Two triangles covering the PSP's 480 x 272 area in the open encoder, sampling
+    // `src` over (0, 0)..(u1, v1) smoothed; replaces what is there. Viewport: the encoder's.
+    void encode_quad(id<MTLTexture> src, float u1, float v1, bool bgra) {
+        id<MTLRenderPipelineState> state = pipeline((15u << 12) | kNoDepth | (bgra ? kBgra : 0u));
+        if (state == nil || encoder_ == nil) return;
+        [encoder_ setRenderPipelineState:state];
+        [encoder_ setFragmentTexture:src atIndex:0];
+        [encoder_ setFragmentSamplerState:samplers_[15] atIndex:0];
+        Uniforms u;
+        std::memset(&u, 0, sizeof(u));
+        u.flags = 1u;
+        u.func = 3u;
+        [encoder_ setFragmentBytes:&u length:sizeof(u) atIndex:0];
+        const float x1 = static_cast<float>(kViewWidth), y1 = static_cast<float>(kViewHeight);
+        auto v = [](float x, float y, float u_, float v_) { return Vertex{x, y, 0.0f, 1.0f, u_, v_, 255, 255, 255, 255}; };
+        const Vertex quad[6] = {v(0, 0, 0, 0), v(x1, 0, u1, 0), v(0, y1, 0, v1), v(0, y1, 0, v1), v(x1, 0, u1, 0), v(x1, y1, u1, v1)};
+        [encoder_ setVertexBytes:quad length:sizeof(quad) atIndex:0];
+        [encoder_ drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+        bound_ = Bound{};
+    }
+
     void ensure_encoder(std::uint32_t target, std::uint32_t depth) {
         if (encoder_ != nil && encoder_target_ == target && encoder_depth_ == depth) return;
         end_encoder();
-        encoder_ = [command_buffer() renderCommandEncoderWithDescriptor:pass_descriptor(target, depth, true)];
+        encoder_ = [command_buffer() renderCommandEncoderWithDescriptor:pass_descriptor(target, depth, depth != 0u)];
         encoder_target_ = target;
         encoder_depth_ = depth;
-        [encoder_ setDepthClipMode:MTLDepthClipModeClamp];
+        if (depth != 0u) [encoder_ setDepthClipMode:MTLDepthClipModeClamp];
         [encoder_ setCullMode:MTLCullModeNone];
         bound_ = Bound{};
     }
@@ -534,9 +628,9 @@ private:
         d.vertexFunction = vertex_function_;
         d.fragmentFunction = fragment_function_;
         d.vertexDescriptor = vertex_descriptor_;
-        d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+        d.depthAttachmentPixelFormat = (key & kNoDepth) ? MTLPixelFormatInvalid : MTLPixelFormatDepth32Float;
         MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[0];
-        c.pixelFormat = MTLPixelFormatRGBA8Unorm;
+        c.pixelFormat = (key & kBgra) ? MTLPixelFormatBGRA8Unorm : MTLPixelFormatRGBA8Unorm;
         const std::uint32_t mask = (key >> 12) & 15u;
         MTLColorWriteMask write = MTLColorWriteMaskNone;
         if (mask & 1u) write |= MTLColorWriteMaskRed;
@@ -575,6 +669,8 @@ private:
     }
 
     std::string name_{"Metal"}, pipeline_error_;
+    std::uint32_t scale_{1}, size_{kTargetSize};
+    CAMetalLayer *layer_{nil};
     id<MTLDevice> device_{nil};
     id<MTLCommandQueue> queue_{nil};
     id<MTLFunction> vertex_function_{nil}, fragment_function_{nil};
@@ -598,9 +694,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<Backend> make_metal_backend(std::string &error) {
+std::unique_ptr<Backend> make_metal_backend(std::string &error, void *layer, int scale) {
     auto backend = std::make_unique<MetalBackend>();
-    if (!backend->init(error)) return nullptr;
+    if (!backend->init(error, layer, scale)) return nullptr;
     return backend;
 }
 

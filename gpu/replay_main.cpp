@@ -41,9 +41,9 @@ void write_bmp(const std::string &path, const std::uint32_t *rgba) {
 std::unique_ptr<Backend> make(const std::string &name) {
     if (name == "soft") return make_soft_backend();
 #ifdef P3P_HAVE_METAL
-    if (name == "metal") {
+    if (name.rfind("metal", 0) == 0) {
         std::string error;
-        auto b = make_metal_backend(error);
+        auto b = make_metal_backend(error, nullptr, name.size() > 5 ? name[5] - '0' : 1);
         if (!b) std::fprintf(stderr, "metal: %s\n", error.c_str());
         return b;
     }

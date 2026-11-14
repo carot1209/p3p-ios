@@ -34,6 +34,7 @@ public:
     void draw(const State &state, const Vertex *vertices, std::uint32_t count) override;
     bool read_target(std::uint32_t id, std::uint32_t *rgba) override;
     void flush() override;
+    bool present(std::uint32_t id) override { return inner_->present(id); }
 
 private:
     struct Texture { std::uint32_t w{}, h{}; std::vector<std::uint32_t> px; };

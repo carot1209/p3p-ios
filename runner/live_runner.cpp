@@ -284,7 +284,14 @@ struct LiveRunner::Impl {
         }
     }
 
-    void present(const psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb) {
+    void present(psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb) {
+        if (hw != nullptr && config.gpu_presents) {
+            if (hw->present_display(memory, fb)) {
+                std::lock_guard<std::mutex> lock(frame_mutex);
+                ++frame_serial;
+            }
+            return;
+        }
         if (hw != nullptr) {
             // A GPU picture is read back when it is new; a CPU-written one
             // (movie frame) is converted from guest memory below.
@@ -698,7 +705,7 @@ void LiveRunner::stop() {
 
 std::uint64_t LiveRunner::copy_frame(std::uint8_t *rgbx, std::uint64_t seen) {
     std::lock_guard<std::mutex> lock(impl_->frame_mutex);
-    if (impl_->frame_serial != seen && impl_->frame_serial != 0u) std::memcpy(rgbx, impl_->frame.data(), impl_->frame.size());
+    if (rgbx != nullptr && impl_->frame_serial != seen && impl_->frame_serial != 0u) std::memcpy(rgbx, impl_->frame.data(), impl_->frame.size());
     return impl_->frame_serial;
 }
 

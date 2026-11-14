@@ -37,6 +37,9 @@ struct Config {
     // GPU renderer: called once on the game thread. Without it, or when it
     // returns nullptr (`error` says why), the CPU renderer draws.
     std::function<std::unique_ptr<gpu::Backend>(std::string &error)> make_gpu_backend;
+    // The GPU back end shows pictures itself (Backend::present) instead of the
+    // host copying frames out with copy_frame().
+    bool gpu_presents{false};
     // Test hook: at each of these guest times (seconds) append a window of
     // `trace_frames` pictures of GPU back-end calls to `trace_path` (gpu/trace.hpp).
     std::string trace_path;
@@ -76,6 +79,7 @@ public:
 
     // Video: copies the newest frame (kScreenWidth x kScreenHeight, bytes R,G,B,X) when
     // its serial differs from `seen`; returns the frame's serial (0: none yet).
+    // `rgbx` may be null: only the serial is wanted (GPU presenting).
     std::uint64_t copy_frame(std::uint8_t *rgbx, std::uint64_t seen);
     // Audio: `frames` interleaved stereo S16 frames at kAudioRate. Silence on underrun.
     // Safe to call from a real-time audio thread (no locks, no allocation).

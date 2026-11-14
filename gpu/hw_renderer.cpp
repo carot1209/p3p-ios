@@ -235,10 +235,11 @@ void HwRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &reg
     if (target == nullptr) { ++hw_stats_.skipped; return; }
     target->format = r24(regs, 0xD2) & 3u;
     target->stride = stride;
-    if (target->cpu_seq > target->gpu_seq) {
+    if (target->cpu_seq > target->gpu_seq && target->cpu_seq != target->uploaded_seq) {
         // The guest wrote this framebuffer since the GPU last drew it: start from its contents.
         flush_batch();
         upload_guest(memory, *target);
+        target->uploaded_seq = target->cpu_seq;
     }
 
     const auto layout = ge::vertex_layout(r24(regs, 0x12));
@@ -400,6 +401,39 @@ void HwRenderer::transfer(psprecomp::GuestMemory &memory, const ge::GeRegisters 
     ge::SoftwareRenderer copy;
     copy.transfer(memory, regs);
     note_cpu_write(dst);
+}
+
+bool HwRenderer::present_display(psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb) {
+    bool shown = false;
+    std::uint32_t a;
+    if (fb.active && fb.topaddr != 0u && vram_address(fb.topaddr, a)) {
+        Target *t = target_for(a, true);
+        if (t != nullptr) {
+            const bool from_cpu = t->gpu_seq <= t->cpu_seq;
+            if (from_cpu) {
+                t->format = static_cast<std::uint32_t>(fb.pixelformat);
+                t->stride = static_cast<std::uint32_t>(std::max(fb.bufferwidth, 1));
+            }
+            const std::uint64_t version = std::max(t->gpu_seq, t->cpu_seq);
+            if (t->id != shown_present_target_ || version != shown_present_version_) {
+                if (from_cpu && t->cpu_seq != t->uploaded_seq) {
+                    flush_batch();
+                    upload_guest(memory, *t);
+                    t->uploaded_seq = t->cpu_seq;
+                }
+                flush_batch();
+                shown = backend_->present(t->id);
+                if (shown) {
+                    shown_present_target_ = t->id;
+                    shown_present_version_ = version;
+                    ++hw_stats_.readbacks;
+                }
+            }
+        }
+    }
+    ++frame_;
+    if ((frame_ & 127u) == 0u) evict_textures();
+    return shown;
 }
 
 bool HwRenderer::read_display(const p3p3ds::hle::DisplayFramebufInfo &fb, std::uint32_t *rgba) {

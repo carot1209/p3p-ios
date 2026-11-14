@@ -8,6 +8,8 @@
 //   report.txt       build, speed and the reason of a stop; attach it to bug reports
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -268,7 +271,15 @@ struct P3PButton {
 - (void)applicationActive:(BOOL)active;
 @end
 
+// A view whose layer the GPU back end draws into (Backend::present).
+@interface P3PMetalView : UIView
+@end
+@implementation P3PMetalView
++ (Class)layerClass { return [CAMetalLayer class]; }
+@end
+
 @implementation P3PViewController {
+    P3PMetalView *_metalView;
     std::unique_ptr<p3pios::LiveRunner> _runner;
     UIView *_screen;
     P3PControlsView *_controls;
@@ -282,7 +293,15 @@ struct P3PButton {
     std::uint64_t _dialogSerial;
     BOOL _started;
     BOOL _reportedEnd;
+    BOOL _usesGpuDisplay;
     CGColorSpaceRef _colorSpace;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CAMetalLayer *layer = (CAMetalLayer *)_metalView.layer;
+    const CGFloat factor = _metalView.contentScaleFactor;
+    layer.drawableSize = CGSizeMake(_metalView.bounds.size.width * factor, _metalView.bounds.size.height * factor);
 }
 
 - (NSString *)documentsPath {
@@ -302,6 +321,13 @@ struct P3PButton {
     _screen.layer.contentsGravity = kCAGravityResizeAspect;
     _screen.layer.magnificationFilter = kCAFilterLinear;
     [self.view addSubview:_screen];
+
+    _metalView = [[P3PMetalView alloc] initWithFrame:self.view.bounds];
+    _metalView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _metalView.backgroundColor = [UIColor blackColor];
+    _metalView.userInteractionEnabled = NO;
+    _metalView.hidden = YES;
+    [self.view addSubview:_metalView];
 
     _controls = [[P3PControlsView alloc] initWithFrame:self.view.bounds];
     _controls.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -329,8 +355,8 @@ struct P3PButton {
     NSString *note = [[self documentsPath] stringByAppendingPathComponent:@"HUONG-DAN.txt"];
     NSString *text = @"Chep file ISO Persona 3 Portable (ULUS-10512) cua ban vao thu muc nay, roi mo lai app.\n"
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
-                     @"Hinh ve bang GPU (Metal). Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay\n"
-                     @"roi mo lai app de ve bang CPU (cham hon).\n";
+                     @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
+                     @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
     [text writeToFile:note atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
     _audio = [[P3PAudio alloc] init];
@@ -372,9 +398,19 @@ struct P3PButton {
     config.data_dir = [self documentsPath].UTF8String;
     config.build_id = P3P_BUILD_ID;
     // The GPU (Metal) draws unless the user put cpu-renderer.txt next to the ISO.
+    // Its resolution is 4x the PSP's unless resolution.txt holds 1, 2 or 3.
     std::error_code ec;
-    if (!std::filesystem::exists(config.data_dir + "/cpu-renderer.txt", ec))
-        config.make_gpu_backend = [](std::string &error) { return p3pios::gpu::make_metal_backend(error); };
+    if (!std::filesystem::exists(config.data_dir + "/cpu-renderer.txt", ec)) {
+        int scale = 4;
+        std::ifstream in(config.data_dir + "/resolution.txt");
+        int wanted = 0;
+        if (in >> wanted && wanted >= 1 && wanted <= 4) scale = wanted;
+        CAMetalLayer *layer = (CAMetalLayer *)_metalView.layer;
+        const CGFloat factor = _metalView.contentScaleFactor;
+        layer.drawableSize = CGSizeMake(_metalView.bounds.size.width * factor, _metalView.bounds.size.height * factor);
+        config.gpu_presents = true;
+        config.make_gpu_backend = [layer, scale](std::string &error) { return p3pios::gpu::make_metal_backend(error, (__bridge void *)layer, scale); };
+    }
     _runner = std::make_unique<p3pios::LiveRunner>();
     std::string error;
     if (!_runner->start(config, error)) {
@@ -383,6 +419,9 @@ struct P3PButton {
         return;
     }
     _started = YES;
+    _usesGpuDisplay = config.gpu_presents;
+    _metalView.hidden = !_usesGpuDisplay;
+    _screen.hidden = _usesGpuDisplay;
     _controls.runner = _runner.get();
     gAudioRunner.store(_runner.get(), std::memory_order_release);
     [self showMessage:@"Đang nạp game…"];
@@ -457,11 +496,11 @@ struct P3PButton {
         if (_ticks % 60u == 1u) [self startGameIfPossible];
         return;
     }
-    const std::uint64_t serial = _runner->copy_frame(_frame.data(), _serial);
+    const std::uint64_t serial = _runner->copy_frame(_usesGpuDisplay ? nullptr : _frame.data(), _serial);
     if (serial != _serial) {
         if (_serial == 0u) [self showMessage:@""];
         _serial = serial;
-        [self presentFrame];
+        if (!_usesGpuDisplay) [self presentFrame];
     }
     p3pios::SaveDialog dialog;
     if (self.presentedViewController == nil && _runner->pending_save_dialog(dialog) && dialog.serial != _dialogSerial) {

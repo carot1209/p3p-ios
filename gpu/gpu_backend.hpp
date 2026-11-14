@@ -65,6 +65,9 @@ public:
     // The top-left kViewWidth x kViewHeight texels of a target as they are after
     // everything queued so far. False when the pixels cannot be read.
     virtual bool read_target(std::uint32_t id, std::uint32_t *rgba) = 0;
+    // Shows the top-left kViewWidth x kViewHeight texels of a target on the back
+    // end's display surface, scaled to fit. False when there is none.
+    virtual bool present(std::uint32_t /*id*/) { return false; }
     // Hands queued work to the GPU without waiting for it.
     virtual void flush() = 0;
 };
