@@ -63,7 +63,7 @@ jobs:
           git config user.email "p3p-ci@users.noreply.github.com"
           git checkout -q --orphan ci-logs-new
           git rm -rfq --cached . >/dev/null 2>&1
-          git clean -fdxq
+          git clean -ffdxq
           cp "$TMP"/* .
           echo "$SHA" > commit.txt
           git add -A

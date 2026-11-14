@@ -1,0 +1,21 @@
+diff --git a/recomp/PSPRecomp/tools/codegen_main.cpp b/recomp/PSPRecomp/tools/codegen_main.cpp
+index e170632..306d348 100644
+--- a/recomp/PSPRecomp/tools/codegen_main.cpp
++++ b/recomp/PSPRecomp/tools/codegen_main.cpp
+@@ -1251,7 +1251,7 @@ void write_import_wrappers(std::ostream &out, const std::vector<psprecomp::PspIm
+     }
+ }
+ 
+-struct ImagePatch;
++struct ImagePatch { std::uint32_t address{}, value{}, width{}; };
+ void write_patch_function(std::ostream &out, const std::vector<ImagePatch> &patches); // P3P3DS
+ 
+ int generate_manual(const std::filesystem::path &elf_path,
+@@ -1610,7 +1610,6 @@ bool write_text_if_changed(const std::filesystem::path &path, const std::string
+ // P3P3DS: profile patch list ("<address> <value> <width>" hex lines, see
+ // tools/cwcheat_patches.py), applied after relocation so generated code and
+ // the runtime image (apply_generated_patches) both see the patched EBOOT.
+-struct ImagePatch { std::uint32_t address{}, value{}, width{}; };
+ std::vector<ImagePatch> load_patches(const std::filesystem::path &path) {
+     std::vector<ImagePatch> patches;
+     if (path.empty()) return patches;
