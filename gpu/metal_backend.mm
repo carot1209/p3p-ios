@@ -492,6 +492,42 @@ public:
         }
     }
 
+    bool present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double aspect) override {
+        @autoreleasepool {
+            if (layer_ == nil || !(aspect > 0.0)) return false;
+            const CGSize size = layer_.drawableSize;
+            if (size.width < 2.0 || size.height < 2.0) return false;
+            id<MTLTexture> picture = new_texture(w, h, rgba);
+            if (picture == nil) return false;
+            end_encoder();
+            id<CAMetalDrawable> drawable = [layer_ nextDrawable];
+            if (drawable == nil) return false;
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = drawable.texture;
+            pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            encoder_ = [command_buffer() renderCommandEncoderWithDescriptor:pass];
+            // The quad covers the PSP's 480 x 272 corner of the 512 x 512 space: the
+            // viewport is sized so that corner is the aspect-fit rectangle.
+            double rw = size.width, rh = rw / aspect;
+            if (rh > size.height) { rh = size.height; rw = rh * aspect; }
+            MTLViewport viewport;
+            viewport.originX = (size.width - rw) * 0.5;
+            viewport.originY = (size.height - rh) * 0.5;
+            viewport.width = rw * kTargetSize / kViewWidth;
+            viewport.height = rh * kTargetSize / kViewHeight;
+            viewport.znear = 0.0;
+            viewport.zfar = 1.0;
+            [encoder_ setViewport:viewport];
+            encode_quad(picture, 1.0f, 1.0f, true);
+            end_encoder();
+            [command_buffer() presentDrawable:drawable];
+            commit(false);
+            return true;
+        }
+    }
+
     void flush() override {
         @autoreleasepool {
             commit(false);

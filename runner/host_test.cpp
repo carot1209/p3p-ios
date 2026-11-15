@@ -100,6 +100,7 @@ int main(int argc, char **argv) {
             else if (kind == "null") config.make_gpu_backend = [](std::string &) -> std::unique_ptr<p3pios::gpu::Backend> { return std::make_unique<NullBackend>(); };
             else { std::fprintf(stderr, "--gpu soft|null\n"); return 2; }
         }
+        else if (a == "--movies") config.movie_dir = value();
         else if (a == "--trace") config.trace_path = value();
         else if (a == "--trace-at") config.trace_at.push_back(std::stod(value()));
         else if (a == "--trace-frames") config.trace_frames = static_cast<std::uint32_t>(std::stoul(value()));

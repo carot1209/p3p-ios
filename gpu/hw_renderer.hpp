@@ -56,6 +56,10 @@ public:
     // was shown; false when it is the one already there or there is no surface.
     bool present_display(psprecomp::GuestMemory &memory, const p3p3ds::hle::DisplayFramebufInfo &fb);
 
+    // Shows a picture that is not the game's (an external movie frame); the
+    // game's own picture is shown again by the next present_display.
+    bool present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double aspect);
+
     [[nodiscard]] const HwStats &hw_stats() const { return hw_stats_; }
     [[nodiscard]] Backend &backend() { return *backend_; }
 

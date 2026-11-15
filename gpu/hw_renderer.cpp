@@ -436,6 +436,13 @@ bool HwRenderer::present_display(psprecomp::GuestMemory &memory, const p3p3ds::h
     return shown;
 }
 
+bool HwRenderer::present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double aspect) {
+    flush_batch();
+    shown_present_target_ = 0;
+    shown_present_version_ = ~0ull;
+    return backend_->present_picture(w, h, rgba, aspect);
+}
+
 bool HwRenderer::read_display(const p3p3ds::hle::DisplayFramebufInfo &fb, std::uint32_t *rgba) {
     bool fresh = false;
     std::uint32_t a;

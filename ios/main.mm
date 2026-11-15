@@ -356,6 +356,7 @@ struct P3PButton {
     NSString *text = @"Chep file ISO Persona 3 Portable (ULUS-10512) cua ban vao thu muc nay, roi mo lai app.\n"
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
+                     @"Phim anime cua ban PS2 (Persona 3 FES): chep cac file .SFD vao thu muc movies/ o day. Bam START de bo qua phim.\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
     [text writeToFile:note atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
@@ -397,6 +398,7 @@ struct P3PButton {
     config.iso_path = iso.UTF8String;
     config.data_dir = [self documentsPath].UTF8String;
     config.build_id = P3P_BUILD_ID;
+    config.movie_dir = config.data_dir + "/movies";
     // The GPU (Metal) draws unless the user put cpu-renderer.txt next to the ISO.
     // Its resolution is 4x the PSP's unless resolution.txt holds 1, 2 or 3.
     std::error_code ec;

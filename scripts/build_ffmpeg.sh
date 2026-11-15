@@ -1,5 +1,6 @@
 #!/bin/bash
-# Minimal static FFmpeg (h264 + atrac3p decoders only) for the movie decoder.
+# Minimal static FFmpeg: h264 + atrac3p for the game's own movies, MPEG-1/2
+# video + ADX audio in an MPEG program stream for the PS2 version's (.SFD).
 #   scripts/build_ffmpeg.sh ios|host <prefix>
 # Skips the build when <prefix>/lib/libavcodec.a already exists (CI cache).
 set -euo pipefail
@@ -9,8 +10,9 @@ VERSION="n7.1"
 SRC="$(mktemp -d)/ffmpeg"
 git clone -q --depth 1 --branch "$VERSION" https://github.com/FFmpeg/FFmpeg.git "$SRC"
 COMMON=(--prefix="$PREFIX" --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect
-        --disable-avdevice --disable-avformat --disable-swscale --disable-swresample --disable-avfilter
-        --enable-decoder=h264,atrac3p --enable-parser=h264 --enable-static --disable-shared --enable-pic)
+        --disable-avdevice --disable-swscale --disable-swresample --disable-avfilter
+        --enable-decoder=h264,atrac3p,mpeg1video,mpeg2video,adpcm_adx --enable-parser=h264,mpegvideo
+        --enable-demuxer=mpegps --enable-protocol=file --enable-static --disable-shared --enable-pic)
 cd "$SRC"
 if [ "$TARGET" = "ios" ]; then
     SDK="$(xcrun -sdk iphoneos --show-sdk-path)"

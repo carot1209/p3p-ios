@@ -68,6 +68,9 @@ public:
     // Shows the top-left kViewWidth x kViewHeight texels of a target on the back
     // end's display surface, scaled to fit. False when there is none.
     virtual bool present(std::uint32_t /*id*/) { return false; }
+    // Shows a picture from outside the game (w x h, r in the low byte) on the
+    // display surface, scaled to fit with the given width / height ratio.
+    virtual bool present_picture(std::uint32_t /*w*/, std::uint32_t /*h*/, const std::uint32_t * /*rgba*/, double /*aspect*/) { return false; }
     // Hands queued work to the GPU without waiting for it.
     virtual void flush() = 0;
 };

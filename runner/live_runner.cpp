@@ -4,6 +4,7 @@
 #include "trace.hpp"
 #ifdef P3P_HAVE_FFMPEG
 #include "ffmpeg_decoder.hpp"
+#include "movie_player.hpp"
 #endif
 
 #include "p3p3ds/ge/renderer.hpp"
@@ -189,6 +190,7 @@ public:
             if (a >= t.base && a < t.base + kTargetBytes) { t.cpu_seq = ++seq_; return; }
     }
     // The displayed picture was written by the CPU last (or never drawn by the GE).
+
     bool shown_from_cpu(std::uint32_t topaddr) {
         const Target &t = target(topaddr);
         return t.gpu_seq <= t.cpu_seq;
@@ -265,6 +267,115 @@ struct LiveRunner::Impl {
     std::shared_ptr<MovieStats> movie_stats = std::make_shared<MovieStats>();
 #endif
     std::vector<std::uint32_t> hw_frame = std::vector<std::uint32_t>(kScreenWidth * kScreenHeight, 0);
+
+#ifdef P3P_HAVE_FFMPEG
+    // PS2 (Persona 3 FES) anime cutscenes for the male route's events. An event
+    // script is recognised when the game reads it whole from umd0.cpk: by its
+    // size and the FNV-1a 64 of its bytes, so the place of the file on the
+    // disc does not matter. The female route's scripts (eNNN_3xx) are other
+    // files and never match.
+    struct MovieCue { std::uint64_t size, fnv1a; const char *event; const char *movies[2]; };
+    static constexpr MovieCue kMovieCues[] = {
+        {4412, 0x23A464550A732252ull, "e100_001", {"P3CT001_01.SFD", nullptr}}, // arrival at the dorm, the contract
+        {1939, 0x0335B1F30EAF388Eull, "e103_001", {"P3CT001_02.SFD", nullptr}}, // Yukari and Mitsuru in the lounge
+        {1784, 0x801D099D55954E32ull, "e108_001", {"P3CT003.SFD", nullptr}},    // the monorail, the school gate
+    };
+    std::vector<std::string> movie_queue;
+    std::string movie_log;
+    std::uint32_t external_movies{0};
+
+    // Blocks the game thread while the movie plays in real time. False when the runner is stopping.
+    bool play_external_movie(const std::string &name) {
+        const std::string path = config.movie_dir + "/" + name;
+        std::string error;
+        auto movie = MoviePlayer::open(path, error);
+        if (!movie) { movie_log += name + ": " + error + "\n"; return true; }
+        std::vector<std::uint32_t> pixels;
+        std::vector<std::int16_t> pcm, queue;
+        std::size_t fed = 0, fed_offset = 0; // stereo frames given to the ring; start of the unfed part of `queue`
+        double seconds = 0.0, shown = 0.0;
+        auto start = std::chrono::steady_clock::now();
+        std::uint64_t pictures = 0;
+        bool start_was_up = false, skipped = false;
+        // Decoding runs 16 pictures ahead of the display: the file carries the
+        // sound for a picture some way after the picture itself.
+        std::deque<std::pair<std::vector<std::uint32_t>, double>> ahead;
+        bool ended = false;
+        for (;;) {
+            while (!ended && ahead.size() < 16u) {
+                double at = 0.0;
+                if (movie->next(pixels, pcm, at)) ahead.emplace_back(std::move(pixels), at);
+                else ended = true;
+            }
+            if (ahead.empty()) break;
+            pixels = std::move(ahead.front().first);
+            seconds = ahead.front().second;
+            ahead.pop_front();
+            if (stop_requested.load(std::memory_order_relaxed)) return false;
+            // The file delivers audio in bursts; the ring holds well under a second
+            // and skips ahead when it runs full, so it is fed by the clock.
+            queue.insert(queue.end(), pcm.begin(), pcm.end());
+            pcm.clear();
+            while (paused.load(std::memory_order_relaxed) && !stop_requested.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                start = std::chrono::steady_clock::now() - std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(shown));
+            }
+            std::this_thread::sleep_until(start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds)));
+            shown = seconds;
+            {
+                const std::size_t due = static_cast<std::size_t>((seconds + 0.12) * kAudioRate);
+                const std::size_t have = queue.size() / 2u - fed_offset;
+                const std::size_t n = due > fed ? std::min(due - fed, have) : 0u;
+                if (n != 0u) { ring.push(queue.data() + fed_offset * 2u, n); fed += n; fed_offset += n; }
+                if (fed_offset > 65536u) { queue.erase(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(fed_offset * 2u)); fed_offset = 0; }
+            }
+            show_picture(pixels, movie->width(), movie->height(), movie->aspect());
+            ++pictures;
+            if (const char *debug = std::getenv("P3P_MOVIE_DEBUG"); debug != nullptr && pictures % 150u == 0u)
+                if (FILE *f = std::fopen(debug, "a")) {
+                    std::fprintf(f, "movie t=%.2f wall=%.2f fed=%.2f queued=%.2f\n", seconds,
+                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), static_cast<double>(fed) / kAudioRate,
+                                 static_cast<double>(queue.size() / 2u - fed_offset) / kAudioRate);
+                    std::fclose(f);
+                }
+            // START (pressed after being released) skips.
+            const bool start_down = (pad.load(std::memory_order_relaxed) & p3p3ds::input::button::Start) != 0u;
+            if (start_down && start_was_up) { skipped = true; break; }
+            if (!start_down) start_was_up = true;
+        }
+        char line[160];
+        std::snprintf(line, sizeof line, "%s: %llu pictures %dx%d, %.1f s%s\n", name.c_str(), static_cast<unsigned long long>(pictures), movie->width(),
+                      movie->height(), shown, skipped ? " (skipped)" : "");
+        movie_log += line;
+        ++external_movies;
+        return true;
+    }
+
+    void show_picture(const std::vector<std::uint32_t> &pixels, int w, int h, double aspect) {
+        if (w <= 0 || h <= 0) return;
+        if (hw != nullptr && config.gpu_presents) {
+            if (hw->present_picture(static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), pixels.data(), aspect)) {
+                std::lock_guard<std::mutex> lock(frame_mutex);
+                ++frame_serial;
+            }
+            return;
+        }
+        // CPU frame: nearest-neighbour into the aspect-fit rectangle of 480 x 272.
+        int rw = static_cast<int>(kScreenWidth), rh = static_cast<int>(rw / aspect + 0.5);
+        if (rh > static_cast<int>(kScreenHeight)) { rh = static_cast<int>(kScreenHeight); rw = static_cast<int>(rh * aspect + 0.5); }
+        rw = std::clamp(rw, 1, static_cast<int>(kScreenWidth));
+        rh = std::clamp(rh, 1, static_cast<int>(kScreenHeight));
+        const int ox = (static_cast<int>(kScreenWidth) - rw) / 2, oy = (static_cast<int>(kScreenHeight) - rh) / 2;
+        std::lock_guard<std::mutex> lock(frame_mutex);
+        std::memset(frame.data(), 0, frame.size());
+        for (int y = 0; y < rh; ++y) {
+            const std::uint32_t *src = &pixels[static_cast<std::size_t>(y * h / rh) * static_cast<std::size_t>(w)];
+            std::uint8_t *dst = &frame[(static_cast<std::size_t>(oy + y) * kScreenWidth + static_cast<std::size_t>(ox)) * 4u];
+            for (int x = 0; x < rw; ++x) std::memcpy(dst + x * 4, &src[x * w / rw], 4);
+        }
+        ++frame_serial;
+    }
+#endif
 
     bool shown_from_cpu(std::uint32_t topaddr) { return hw != nullptr ? hw->shown_from_cpu(topaddr) : tracker->shown_from_cpu(topaddr); }
 
@@ -400,6 +511,12 @@ struct LiveRunner::Impl {
                 text += buf;
             }
 #endif
+#ifdef P3P_HAVE_FFMPEG
+            if (!config.movie_dir.empty()) {
+                text += "movies : " + std::to_string(external_movies) + " external played\n";
+                if (!movie_log.empty()) text += movie_log;
+            }
+#endif
             if (hw != nullptr) {
                 const auto &h = hw->hw_stats();
                 std::snprintf(buf, sizeof buf,
@@ -509,6 +626,9 @@ struct LiveRunner::Impl {
                 movies_decoded = true;
             }
 #endif
+#ifdef P3P_HAVE_FFMPEG
+            kernel.io().trace_reads = !config.movie_dir.empty();
+#endif
             rt.memory().vram_write_observer = [this](std::uint32_t address, std::size_t) {
                 if (hw != nullptr) hw->note_cpu_write(address);
                 else tracker->note_cpu_write(address);
@@ -552,6 +672,27 @@ struct LiveRunner::Impl {
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     reset_pacing = true;
                 }
+
+#ifdef P3P_HAVE_FFMPEG
+                if (kernel.io().trace_reads) {
+                    for (const auto &read : kernel.io().read_log)
+                        for (const auto &cue : kMovieCues)
+                            if (read.size == cue.size && read.fnv1a == cue.fnv1a)
+                                for (const char *name : cue.movies)
+                                    if (name != nullptr) movie_queue.emplace_back(name);
+                    kernel.io().read_log.clear();
+                    if (!movie_queue.empty()) {
+                        for (const auto &name : movie_queue)
+                            if (!play_external_movie(name)) break;
+                        movie_queue.clear();
+                        reset_pacing = true;
+                        if (stop_requested.load(std::memory_order_relaxed)) {
+                            rt.stop("Closed by the user");
+                            throw psprecomp::FrontierHalt{};
+                        }
+                    }
+                }
+#endif
 
                 // Controller.
                 const std::uint64_t packed = pad.load(std::memory_order_relaxed);

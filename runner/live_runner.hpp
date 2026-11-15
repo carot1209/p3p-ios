@@ -33,7 +33,11 @@ struct Config {
     std::string data_dir;    // writable: ms0/ (saves), mods/, report.txt
     std::string build_id;
     bool skip_movies{true};  // without a video decoder: press START for the game while a movie plays
-    bool decode_movies{true}; // FFmpeg decoder for PSMF movies (when built with P3P_HAVE_FFMPEG)
+    bool decode_movies{true};
+    // Folder with the PS2 version's movies (P3CT001_01.SFD ...). When a file is
+    // there, it plays where the male route's matching event starts (movie
+    // table in live_runner.cpp); START skips it. Empty: off.
+    std::string movie_dir; // FFmpeg decoder for PSMF movies (when built with P3P_HAVE_FFMPEG)
     bool quiet{true};        // discard the runtime's std::cout diagnostics
     // GPU renderer: called once on the game thread. Without it, or when it
     // returns nullptr (`error` says why), the CPU renderer draws.

@@ -35,6 +35,9 @@ public:
     bool read_target(std::uint32_t id, std::uint32_t *rgba) override;
     void flush() override;
     bool present(std::uint32_t id) override { return inner_->present(id); }
+    bool present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double aspect) override {
+        return inner_->present_picture(w, h, rgba, aspect);
+    }
 
 private:
     struct Texture { std::uint32_t w{}, h{}; std::vector<std::uint32_t> px; };
