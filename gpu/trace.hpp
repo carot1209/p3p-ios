@@ -34,7 +34,12 @@ public:
     void draw(const State &state, const Vertex *vertices, std::uint32_t count) override;
     bool read_target(std::uint32_t id, std::uint32_t *rgba) override;
     void flush() override;
-    bool present(std::uint32_t id) override { return inner_->present(id); }
+    // While recording, a presented picture is also a read_target record, so
+    // traces of a presenting back end replay like the others.
+    bool present(std::uint32_t id) override {
+        if (recording()) { std::vector<std::uint32_t> scratch(kViewWidth * kViewHeight); read_target(id, scratch.data()); }
+        return inner_->present(id);
+    }
     bool present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double aspect) override {
         return inner_->present_picture(w, h, rgba, aspect);
     }

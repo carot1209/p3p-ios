@@ -21,6 +21,15 @@ rm -rf "$OUT"; mkdir -p "$OUT"
     echo "== replay at 3x (read back as block means; edges differ a little from 1x)"
     "$OUT/gpu_replay" "$OUT/trace.bin" "$OUT" soft metal3
     echo "exit code: $?"
+    echo "== movie pictures (uploads into a target, then shown) at 1x and 4x"
+    gunzip -c "$ROOT/tests/gpu_trace_movie.bin.gz" > "$OUT/movie.bin" || exit 1
+    mkdir -p "$OUT/movie1" "$OUT/movie4"
+    "$OUT/gpu_replay" "$OUT/movie.bin" "$OUT/movie1" soft metal
+    echo "exit code: $?"
+    "$OUT/gpu_replay" "$OUT/movie.bin" "$OUT/movie4" soft metal4
+    echo "exit code: $?"
+    for d in movie1 movie4; do for f in "$OUT/$d"/*.bmp; do mv "$f" "$OUT/${d}_$(basename "$f")"; done; rmdir "$OUT/$d"; done
+    rm -f "$OUT/movie.bin"
 } 2>&1 | tee "$OUT/result.txt"
 for f in "$OUT"/*.bmp; do
     [ -e "$f" ] || continue

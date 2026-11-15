@@ -74,6 +74,40 @@ void write_bmp(const std::string &path, const std::vector<std::uint8_t> &rgbx) {
 }
 } // namespace
 
+// "--gpu present": the soft back end showing pictures itself, as the Metal one
+// does on the phone (Config::gpu_presents). Every 30th picture it is asked to
+// show goes to <dir>/pNNNNN.bmp.
+struct PresentingBackend final : p3pios::gpu::Backend {
+    std::unique_ptr<p3pios::gpu::Backend> inner = p3pios::gpu::make_soft_backend();
+    std::string dir;
+    std::uint64_t presents = 0, uploads = 0;
+    [[nodiscard]] const char *name() const override { return "soft, presenting"; }
+    void create_texture(std::uint32_t id, std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba) override { inner->create_texture(id, w, h, rgba); }
+    void destroy_texture(std::uint32_t id) override { inner->destroy_texture(id); }
+    void create_target(std::uint32_t id) override { inner->create_target(id); }
+    void create_depth(std::uint32_t id) override { inner->create_depth(id); }
+    void upload_target(std::uint32_t id, const std::uint32_t *rgba) override { ++uploads; inner->upload_target(id, rgba); }
+    void draw(const p3pios::gpu::State &st, const p3pios::gpu::Vertex *v, std::uint32_t n) override { inner->draw(st, v, n); }
+    bool read_target(std::uint32_t id, std::uint32_t *rgba) override { return inner->read_target(id, rgba); }
+    void flush() override { inner->flush(); }
+    void dump(const std::uint32_t *rgba, std::uint32_t w, std::uint32_t h) {
+        if (presents++ % 30u != 0u || dir.empty() || w != 480u || h != 272u) return;
+        std::vector<std::uint8_t> px(static_cast<std::size_t>(w) * h * 4u);
+        std::memcpy(px.data(), rgba, px.size());
+        char name[64];
+        std::snprintf(name, sizeof name, "/p%05llu.bmp", static_cast<unsigned long long>(presents / 30u));
+        write_bmp(dir + name, px);
+    }
+    bool present(std::uint32_t id) override {
+        std::vector<std::uint32_t> px(480u * 272u);
+        if (!inner->read_target(id, px.data())) return false;
+        dump(px.data(), 480u, 272u);
+        return true;
+    }
+    bool present_picture(std::uint32_t w, std::uint32_t h, const std::uint32_t *rgba, double) override { dump(rgba, w, h); return true; }
+    ~PresentingBackend() override { std::fprintf(stderr, "presenting backend: %llu presents, %llu uploads\n", (unsigned long long)presents, (unsigned long long)uploads); }
+};
+
 int main(int argc, char **argv) {
     p3pios::Config config;
     config.build_id = "host-test";
@@ -98,7 +132,12 @@ int main(int argc, char **argv) {
             const std::string kind = value();
             if (kind == "soft") config.make_gpu_backend = [](std::string &) { return p3pios::gpu::make_soft_backend(); };
             else if (kind == "null") config.make_gpu_backend = [](std::string &) -> std::unique_ptr<p3pios::gpu::Backend> { return std::make_unique<NullBackend>(); };
-            else { std::fprintf(stderr, "--gpu soft|null\n"); return 2; }
+            else if (kind.rfind("present:", 0) == 0) {
+                const std::string dir = kind.substr(8);
+                config.gpu_presents = true;
+                config.make_gpu_backend = [dir](std::string &) { auto b = std::make_unique<PresentingBackend>(); b->dir = dir; return std::unique_ptr<p3pios::gpu::Backend>(std::move(b)); };
+            }
+            else { std::fprintf(stderr, "--gpu soft|null|present:<dir>\n"); return 2; }
         }
         else if (a == "--movies") config.movie_dir = value();
         else if (a == "--trace") config.trace_path = value();
