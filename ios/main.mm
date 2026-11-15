@@ -153,6 +153,15 @@ static int install_mod_packages(const std::filesystem::path &documents) {
 // ---------------------------------------------------------------------------
 // Touch controls: PSP buttons drawn over the picture.
 // ---------------------------------------------------------------------------
+// Where the 480x272 picture goes: the whole screen in landscape (aspect fit),
+// the top of the screen below the notch in portrait.
+static BOOL p3p_portrait(CGRect bounds) { return bounds.size.height > bounds.size.width; }
+static CGRect p3p_picture_rect(CGRect bounds, UIEdgeInsets insets) {
+    if (!p3p_portrait(bounds)) return bounds;
+    const CGFloat h = std::floor(bounds.size.width * 272.0 / 480.0);
+    return CGRectMake(bounds.origin.x, bounds.origin.y + insets.top, bounds.size.width, h);
+}
+
 struct P3PButton {
     CGRect frame;
     std::uint32_t mask;
@@ -219,6 +228,47 @@ struct P3PButton {
     return self;
 }
 
+// Portrait: picture on top; below it L/R (toggle between), d-pad and face
+// buttons side by side, SELECT/START at the bottom.
+- (void)layoutPortrait {
+    using namespace p3pios::button;
+    const CGRect b = self.bounds;
+    const UIEdgeInsets insets = self.safeAreaInsets;
+    const CGFloat unit = b.size.width / 414.0;
+    const CGRect picture = p3p_picture_rect(b, insets);
+    const CGFloat left = b.origin.x + MAX(insets.left, 12.0);
+    const CGFloat right = CGRectGetMaxX(b) - MAX(insets.right, 12.0);
+    const CGFloat areaTop = CGRectGetMaxY(picture) + 14.0 * unit;
+    const CGFloat areaBottom = CGRectGetMaxY(b) - MAX(insets.bottom, 10.0);
+
+    _buttons.clear();
+    const CGFloat shoulderW = 96.0 * unit, shoulderH = 40.0 * unit;
+    _buttons.push_back({CGRectMake(left, areaTop, shoulderW, shoulderH), L, "L", false});
+    _buttons.push_back({CGRectMake(right - shoulderW, areaTop, shoulderW, shoulderH), R, "R", false});
+    const CGFloat toggleW = 56.0 * unit, toggleH = 30.0 * unit;
+    _toggleFrame = CGRectMake(CGRectGetMidX(b) - toggleW / 2.0, areaTop + (shoulderH - toggleH) / 2.0, toggleW, toggleH);
+
+    const CGFloat smallW = 76.0 * unit, smallH = 28.0 * unit, midX = CGRectGetMidX(b);
+    const CGFloat smallY = areaBottom - smallH - 8.0 * unit;
+    _buttons.push_back({CGRectMake(midX - smallW - 12.0 * unit, smallY, smallW, smallH), Select, "SELECT", false});
+    _buttons.push_back({CGRectMake(midX + 12.0 * unit, smallY, smallW, smallH), Start, "START", false});
+
+    // The d-pad and the face buttons centred in the space between.
+    const CGFloat midY = (areaTop + shoulderH + smallY) / 2.0;
+    _padRadius = 74.0 * unit;
+    _padCenter = CGPointMake(left + _padRadius + 10.0 * unit, midY);
+    const CGFloat face = 60.0 * unit, spread = 58.0 * unit;
+    const CGPoint fc = CGPointMake(right - spread - face / 2.0 - 10.0 * unit, midY);
+    auto addRound = [&](CGFloat cx, CGFloat cy, std::uint32_t mask, const char *label) {
+        _buttons.push_back({CGRectMake(cx - face / 2.0, cy - face / 2.0, face, face), mask, label, true});
+    };
+    addRound(fc.x, fc.y - spread, Triangle, "\xE2\x96\xB3");
+    addRound(fc.x + spread, fc.y, Circle, "\xE2\x97\x8B");
+    addRound(fc.x, fc.y + spread, Cross, "\xE2\x9C\x95");
+    addRound(fc.x - spread, fc.y, Square, "\xE2\x96\xA1");
+    [self setNeedsDisplay];
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
     using namespace p3pios::button;
@@ -233,6 +283,10 @@ struct P3PButton {
     _padRadius = 72.0 * unit;
     _padCenter = CGPointMake(left + _padRadius + 6.0 * unit, bottom - _padRadius - 34.0 * unit);
 
+    if (p3p_portrait(b)) {
+        [self layoutPortrait];
+        return;
+    }
     _buttons.clear();
     const CGFloat face = 58.0 * unit, spread = 56.0 * unit;
     const CGPoint fc = CGPointMake(right - spread - face / 2.0 - 6.0 * unit, bottom - spread - face / 2.0 - 34.0 * unit);
@@ -624,6 +678,13 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    const CGRect bounds = self.view.bounds;
+    const CGRect picture = p3p_picture_rect(bounds, self.view.safeAreaInsets);
+    _screen.frame = picture;
+    _metalView.frame = picture;
+    _controls.frame = bounds;
+    _statusLabel.frame = p3p_portrait(bounds) ? CGRectMake(0.0, CGRectGetMaxY(picture) + 1.0, bounds.size.width, 14.0)
+                                              : CGRectMake(0.0, 2.0, bounds.size.width, 14.0);
     CAMetalLayer *layer = (CAMetalLayer *)_metalView.layer;
     const CGFloat factor = _metalView.contentScaleFactor;
     layer.drawableSize = CGSizeMake(_metalView.bounds.size.width * factor, _metalView.bounds.size.height * factor);
@@ -691,7 +752,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Nut AN/HIEN o dai den canh hinh: an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Xoay doc: hinh o tren, nut o duoi (bat khoa xoay cua iPhone de giu 1 huong). Nut AN/HIEN o dai den canh hinh (doc: giua L va R): an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
@@ -870,7 +931,9 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     else [_controls releaseAll];
 }
 
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait;
+}
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
