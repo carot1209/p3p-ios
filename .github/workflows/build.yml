@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/p3p-aot-cache
-          key: p3p-aot-${{ hashFiles('game/eboot.elf', 'scripts/gen_make.py', 'upstream.ref') }}
+          key: p3p-aot-${{ hashFiles('game/eboot.elf', 'scripts/gen_make.py', 'upstream.ref', 'patches/fmv_unhardcode.txt') }}
 
       - name: Cache FFmpeg
         uses: actions/cache@v4

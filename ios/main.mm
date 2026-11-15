@@ -50,6 +50,49 @@ static OSStatus P3PRender(void *, AudioUnitRenderActionFlags *, const AudioTimeS
 - (void)resume;
 @end
 
+// A Persona mod package (Aemulus layout: data/ and FMV/ next to Package.xml,
+// e.g. "Cutscenes Restored (Subtitled)") dropped into the app's folder, up
+// to two levels deep, is moved where the game looks for it: data/ into
+// mods/bind/data/ (Mod Support's loose files) and FMV/*.pmsf into mods/FMV/
+// (ms0:/PSP/P3P is the mods/ folder). Returns the number of files moved.
+static int install_mod_packages(const std::filesystem::path &documents) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<fs::path> packages;
+    std::vector<fs::path> level{documents};
+    for (int depth = 0; depth < 2; ++depth) {
+        std::vector<fs::path> next;
+        for (const auto &dir : level)
+            for (const auto &entry : fs::directory_iterator(dir, ec)) {
+                if (!entry.is_directory(ec)) continue;
+                const std::string name = entry.path().filename().string();
+                if (depth == 0 && (name == "mods" || name == "ms0" || name == "movies")) continue;
+                if (fs::exists(entry.path() / "Package.xml", ec) &&
+                    (fs::is_directory(entry.path() / "data", ec) || fs::is_directory(entry.path() / "FMV", ec)))
+                    packages.push_back(entry.path());
+                else next.push_back(entry.path());
+            }
+        level = next;
+    }
+    int moved = 0;
+    const auto move_tree = [&](const fs::path &from, const fs::path &to) {
+        for (auto it = fs::recursive_directory_iterator(from, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (!it->is_regular_file(ec)) continue;
+            const fs::path target = to / fs::relative(it->path(), from, ec);
+            fs::create_directories(target.parent_path(), ec);
+            fs::remove(target, ec);
+            fs::rename(it->path(), target, ec);
+            if (!ec) ++moved;
+        }
+    };
+    for (const auto &package : packages) {
+        move_tree(package / "data", documents / "mods" / "bind" / "data");
+        move_tree(package / "FMV", documents / "mods" / "FMV");
+        fs::rename(package, documents / "mods" / ("installed-" + package.filename().string()), ec);
+    }
+    return moved;
+}
+
 @implementation P3PAudio {
     AudioUnit _unit;
     BOOL _ready;
@@ -356,7 +399,9 @@ struct P3PButton {
     NSString *text = @"Chep file ISO Persona 3 Portable (ULUS-10512) cua ban vao thu muc nay, roi mo lai app.\n"
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
-                     @"Phim anime cua ban PS2 (Persona 3 FES): chep cac file .SFD vao thu muc movies/ o day. Bam START de bo qua phim.\n"
+                     @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
+                     @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
+                     @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
     [text writeToFile:note atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
@@ -393,6 +438,7 @@ struct P3PButton {
         [self showMessage:@"Chưa có file ISO.\n\nMở app Tệp (Files) → Trên iPhone → Persona 3 P,\nchép file ISO Persona 3 Portable (ULUS-10512) của bạn vào đó.\nApp sẽ tự chạy khi thấy file."];
         return;
     }
+    install_mod_packages([self documentsPath].UTF8String);
     p3pios::Config config;
     config.elf_path = elf.UTF8String;
     config.iso_path = iso.UTF8String;

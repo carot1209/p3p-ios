@@ -51,6 +51,9 @@ fi
 echo "== AOT generation"
 rm -rf "$GEN"; mkdir -p "$GEN"
 python3 "$UP/tools/cwcheat_patches.py" "$UP/p3p/p3p-patches/ULUS10512.ini" "$UP/profiles/p3p/config/cwcheat_patches.txt" "$BUILD/gen/patches.txt"
+# Cutscenes Restored "Unhardcode FMV" (patches/fmv_unhardcode.txt; the patch
+# list reader takes only "<address> <value> <width>" triples, so no comments).
+grep '^0x' "$ROOT/patches/fmv_unhardcode.txt" >> "$BUILD/gen/patches.txt"
 "$BUILD/psp_recomp" "$ELF" --auto "$GEN" 0x08804000 16384 "$BUILD/gen/patches.txt" --no-transfer-records | tail -8
 python3 "$UP/tools/verify_aot_layout.py" "$GEN" 237 16384
 
@@ -60,7 +63,7 @@ FFMPEG="${P3P_FFMPEG_PREFIX:-$BUILD/ffmpeg-ios}"
 
 # The AOT archive only changes with the EBOOT, the upstream revision and the
 # compiler flags: reuse it when all three are the same.
-KEY="$(cat "$ELF" "$ROOT/scripts/gen_make.py" "$ROOT/upstream.ref" | shasum -a 256 | cut -c1-16)"
+KEY="$(cat "$ELF" "$ROOT/scripts/gen_make.py" "$ROOT/upstream.ref" "$ROOT/patches/fmv_unhardcode.txt" | shasum -a 256 | cut -c1-16)"
 ARCHIVE="$CACHE/libp3p_aot-$KEY.a"
 IOS="$BUILD/ios"
 if [ -f "$ARCHIVE" ]; then
