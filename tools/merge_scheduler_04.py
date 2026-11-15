@@ -38,13 +38,6 @@ for n_ev, ev in enumerate(([(PUSHIS, 2), (PUSHIS, 100), (COMM, 16384)], [(PUSHIS
     lab = L0 + n_ev
     inserts.append((i, [W(PUSHIS, 4104), W(COMM, 7), W(PUSHREG), W(IF, lab)], None))
     inserts.append((i + 3, [], lab))               # label right after the event call
-h8 = proc_off('sdl04_08_PM_D_hook')
-i = find(h8, [(COMM, 16407)])
-lf, le = L0 + 2, L0 + 3
-inserts.append((i, [W(PUSHIS, 4104), W(COMM, 7), W(PUSHREG), W(IF, lf), W(GOTO, le)], None))
-inserts.append((i, [W(COMM, 16406)], lf))          # female: the vanilla call the male mod removed
-inserts.append((i, [], le))
-
 # Build the new code and the old->new index map.
 new, labelpos = [], {}
 inserts.sort(key=lambda x: x[0])
@@ -57,7 +50,7 @@ for idx in range(len(words) + 1):
         new.extend(block); k += 1
     oldmap[idx] = len(new)
     if idx < len(words): new.append(words[idx])
-assert sorted(labelpos) == [L0, L0 + 1, L0 + 2, L0 + 3], labelpos
+assert sorted(labelpos) == [L0, L0 + 1], labelpos
 
 def rebase(e):
     e = bytearray(e); o = struct.unpack_from('<I', e, 24)[0]
