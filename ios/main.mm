@@ -180,6 +180,10 @@ struct P3PButton {
     NSTimeInterval _gestureBegan;
     NSUInteger _gestureFingers;
     BOOL _gestureMoved;
+    BOOL _gestureUsed;          // became a long press: no tap, no stick
+    CGFloat _gestureDrift;      // farthest a single finger went from its start
+    NSTimeInterval _twoSince;   // when the second finger came down
+    std::uint32_t _holdMask;    // TRIANGLE while two fingers rest
     std::uint32_t _dragMask;
     std::uint8_t _dragX, _dragY;
     NSTimeInterval _dragSince;
@@ -249,8 +253,16 @@ struct P3PButton {
     const CGFloat smallW = 76.0 * unit, smallH = 28.0 * unit, gap = 14.0 * unit;
     _buttons.push_back({CGRectMake(left, top + shoulderH + gap, smallW, smallH), Select, "SELECT", false});
     _buttons.push_back({CGRectMake(right - smallW, top + shoulderH + gap, smallW, smallH), Start, "START", false});
-    const CGFloat toggleW = 64.0 * unit, toggleH = 26.0 * unit;
-    _toggleFrame = CGRectMake(CGRectGetMidX(b) - toggleW / 2.0, top + 14.0, toggleW, toggleH);
+    // The toggle sits in the black bar beside the 480x272 picture, on the side
+    // without the notch, at mid height (between R/START and the face buttons).
+    const CGFloat toggleW = 40.0 * unit, toggleH = 30.0 * unit;
+    BOOL notchLeft = YES;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.window.windowScene;
+        if (scene != nil) notchLeft = scene.interfaceOrientation != UIInterfaceOrientationLandscapeLeft;
+    }
+    const CGFloat toggleX = notchLeft ? CGRectGetMaxX(b) - toggleW - 4.0 : b.origin.x + 4.0;
+    _toggleFrame = CGRectMake(toggleX, CGRectGetMidY(b) - toggleH / 2.0 - 30.0 * unit, toggleW, toggleH);
     [self setNeedsDisplay];
 }
 
@@ -293,7 +305,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 }
 
 - (void)sendPad {
-    std::uint32_t buttons = _mask | _pulse | _dragMask | _padMask;
+    std::uint32_t buttons = _mask | _pulse | _dragMask | _padMask | _holdMask;
     std::uint8_t x = 128, y = 128;
     if (_padX != 128 || _padY != 128) { x = _padX; y = _padY; }
     else if (_dragMask != 0u) { x = _dragX; y = _dragY; }
@@ -317,6 +329,8 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         if (_gestureFingers != 1) continue;
         const CGPoint a = start.CGPointValue, b = [touch locationInView:self];
         const CGFloat dx = b.x - a.x, dy = b.y - a.y, distance = std::sqrt(dx * dx + dy * dy);
+        _gestureDrift = MAX(_gestureDrift, distance);
+        if (_gestureUsed) continue;
         if (distance >= 22.0) _gestureMoved = YES;
         if (!_gestureMoved) continue;
         // Held drag: a stick centred where the finger came down. Full tilt
@@ -368,10 +382,13 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
             _gestureBegan = touch.timestamp;
             _gestureFingers = 0;
             _gestureMoved = NO;
+            _gestureUsed = NO;
+            _gestureDrift = 0.0;
         }
         [_gestureStart setObject:[NSValue valueWithCGPoint:p] forKey:touch];
         _gestureFingers = MAX(_gestureFingers, (NSUInteger)_gestureStart.count);
-        if (_gestureFingers > 1) _dragMask = 0; // two fingers: a tap, not a stick
+        if (_gestureStart.count == 2) _twoSince = touch.timestamp;
+        if (_gestureFingers > 1) _dragMask = 0; // two fingers: a tap or TRIANGLE, not a stick
     }
 }
 
@@ -384,7 +401,11 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         const CGPoint a = start.CGPointValue, b = [touch locationInView:self];
         const CGFloat dx = b.x - a.x, dy = b.y - a.y, distance = std::sqrt(dx * dx + dy * dy);
         const NSTimeInterval held = touch.timestamp - _gestureBegan;
-        if (cancelled) continue;
+        if (_gestureStart.count < 2 && _holdMask != 0u) {
+            _holdMask = 0u;
+            [self sendPad];
+        }
+        if (cancelled || _gestureUsed) continue;
         if (_gestureMoved) {
             // A flick shorter than a game frame or two still moves one step.
             if (_dragMask != 0u && event.timestamp - _dragSince < 0.12) [self pulse:direction_mask(dx, dy)];
@@ -396,8 +417,26 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 
 // Called every screen refresh: merges a connected game controller. The
 // GameController framework is opened at run time, so the app links as before.
+// Long presses, checked every screen refresh while fingers rest:
+// two fingers for 0.4 s hold TRIANGLE (dialogue fast-forward) until lifted;
+// one finger still for 0.8 s presses SQUARE once.
+- (void)checkLongPress {
+    using namespace p3pios::button;
+    if (_gestureStart.count == 0 || _gestureUsed || !_inputEnabled) return;
+    const NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+    if (_gestureStart.count >= 2 && now - _twoSince >= 0.4) {
+        _gestureUsed = YES;
+        _holdMask = Triangle;
+        [self sendPad];
+    } else if (_gestureFingers == 1 && !_gestureMoved && _gestureDrift < 16.0 && now - _gestureBegan >= 0.8) {
+        _gestureUsed = YES;
+        [self pulse:Square];
+    }
+}
+
 - (void)pollController {
     using namespace p3pios::button;
+    [self checkLongPress];
     static Class controllerClass = Nil;
     static bool looked = false;
     if (!looked) {
@@ -447,6 +486,8 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     _mask = 0;
     _pulse = 0;
     _dragMask = 0;
+    _holdMask = 0;
+    _gestureUsed = NO;
     ++_pulseSerial;
     [_gestureStart removeAllObjects];
     [self sendPad];
@@ -494,8 +535,8 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         [line setStroke];
         pill.lineWidth = 1.0;
         [pill stroke];
-        NSString *text = _compact ? @"HI\u1EC6N N\u00DAT" : @"\u1EA8N N\u00DAT";
-        NSDictionary *attributes = @{NSFontAttributeName : [UIFont boldSystemFontOfSize:_toggleFrame.size.height * 0.4],
+        NSString *text = _compact ? @"HI\u1EC6N" : @"\u1EA8N";
+        NSDictionary *attributes = @{NSFontAttributeName : [UIFont boldSystemFontOfSize:_toggleFrame.size.height * 0.36],
                                      NSForegroundColorAttributeName : [UIColor colorWithWhite:1.0 alpha:0.75]};
         const CGSize size = [text sizeWithAttributes:attributes];
         [text drawAtPoint:CGPointMake(CGRectGetMidX(_toggleFrame) - size.width / 2.0, CGRectGetMidY(_toggleFrame) - size.height / 2.0)
@@ -588,6 +629,15 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     layer.drawableSize = CGSizeMake(_metalView.bounds.size.width * factor, _metalView.bounds.size.height * factor);
 }
 
+// Turning the phone over swaps the notch side: the toggle moves with it.
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    P3PControlsView *controls = _controls;
+    [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext>) {
+        [controls setNeedsLayout];
+    }];
+}
+
 - (NSString *)documentsPath {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
 }
@@ -641,7 +691,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog). Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Nut AN NUT o giua tren: an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Nut AN/HIEN o dai den canh hinh: an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
