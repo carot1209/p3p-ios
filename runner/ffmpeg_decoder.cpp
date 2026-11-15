@@ -35,7 +35,18 @@ public:
     bool decode_video(const p3p3ds::hle::MpegAccessUnit &au, psprecomp::GuestMemory &memory, std::uint32_t dest,
                       std::uint32_t stride, std::uint32_t format) override {
         ++stats_->video_aus;
+        // A new movie (its timestamps start over) or a decoder that stopped
+        // giving pictures gets a fresh decoder: one that is stuck would show
+        // its last picture for the rest of the session.
+        const bool restarted = au.pts >= 0 && last_pts_ >= 0 && au.pts + 90000 < last_pts_;
+        if (au.pts >= 0) last_pts_ = au.pts;
+        if (video_ != nullptr && (restarted || barren_ >= 45u)) {
+            avcodec_free_context(&video_);
+            ++stats_->video_resets;
+            barren_ = 0;
+        }
         if (video_ == nullptr && !open_video()) return false;
+        if (au.data.empty()) ++stats_->empty_aus;
         bool got = false;
         if (!au.data.empty() && send(video_, au.data.data(), au.data.size())) {
             while (avcodec_receive_frame(video_, frame_) == 0) {
@@ -45,6 +56,7 @@ public:
         } else if (!au.data.empty()) {
             ++stats_->video_errors;
         }
+        barren_ = got ? 0u : barren_ + 1u;
         if (rgba_.empty()) return false;
         // A picture each call: the newest one (an AU that gave none repeats it).
         write(memory, dest, stride, format);
@@ -118,6 +130,7 @@ private:
         packet_->data = scratch_.data();
         packet_->size = static_cast<int>(size);
         const int rc = avcodec_send_packet(ctx, packet_);
+        if (rc != 0 && rc != AVERROR(EAGAIN) && ctx == video_) stats_->last_video_error = rc;
         packet_->data = nullptr;
         packet_->size = 0;
         return rc == 0 || rc == AVERROR(EAGAIN);
@@ -183,6 +196,8 @@ private:
     std::size_t audio_block_{};
     std::vector<std::uint8_t> scratch_;
     std::vector<std::uint32_t> rgba_;
+    std::int64_t last_pts_{-1};
+    std::uint32_t barren_{}; // consecutive AUs that gave no picture
     std::uint32_t width_{}, height_{};
 };
 

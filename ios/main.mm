@@ -51,7 +51,7 @@ static OSStatus P3PRender(void *, AudioUnitRenderActionFlags *, const AudioTimeS
 @end
 
 // A Persona mod package (Aemulus layout: data/ and FMV/ next to Package.xml,
-// e.g. "Cutscenes Restored (Subtitled)") dropped into the app's folder, up
+// e.g. "Cutscenes Restored (Subtitled)") or a folder holding only FMV/NN.pmsf dropped into the app's folder, up
 // to two levels deep, is moved where the game looks for it: data/ into
 // mods/bind/data/ (Mod Support's loose files) and FMV/*.pmsf into mods/FMV/
 // (ms0:/PSP/P3P is the mods/ folder). Returns the number of files moved.
@@ -67,9 +67,12 @@ static int install_mod_packages(const std::filesystem::path &documents) {
                 if (!entry.is_directory(ec)) continue;
                 const std::string name = entry.path().filename().string();
                 if (depth == 0 && (name == "mods" || name == "ms0" || name == "movies")) continue;
-                if (fs::exists(entry.path() / "Package.xml", ec) &&
-                    (fs::is_directory(entry.path() / "data", ec) || fs::is_directory(entry.path() / "FMV", ec)))
-                    packages.push_back(entry.path());
+                const bool described = fs::exists(entry.path() / "Package.xml", ec) &&
+                                       (fs::is_directory(entry.path() / "data", ec) || fs::is_directory(entry.path() / "FMV", ec));
+                // A movie-only pack (another dub of the same movies) is just FMV/NN.pmsf.
+                const bool movies = fs::exists(entry.path() / "FMV" / "00.pmsf", ec);
+                if (described) packages.insert(packages.begin(), entry.path()); // full packages first,
+                else if (movies) packages.push_back(entry.path());              // movie packs over them
                 else next.push_back(entry.path());
             }
         level = next;

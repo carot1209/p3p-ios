@@ -12,6 +12,8 @@ namespace p3pios {
 
 struct MovieStats {
     std::uint64_t video_aus{}, pictures{}, video_errors{}, audio_aus{}, audio_errors{};
+    std::uint64_t video_resets{}, empty_aus{}; // decoder reopened; AUs without data
+    int last_video_error{};                  // last avcodec_send_packet failure
     std::uint32_t width{}, height{};
 };
 

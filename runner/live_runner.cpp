@@ -509,6 +509,9 @@ struct LiveRunner::Impl {
                               static_cast<unsigned long long>(mv.video_errors), static_cast<unsigned long long>(mv.audio_aus),
                               static_cast<unsigned long long>(mv.audio_errors));
                 text += buf;
+                std::snprintf(buf, sizeof buf, "         %llu decoder resets, %llu empty AUs, last error %d\n",
+                              static_cast<unsigned long long>(mv.video_resets), static_cast<unsigned long long>(mv.empty_aus), mv.last_video_error);
+                text += buf;
             }
 #endif
 #ifdef P3P_HAVE_FFMPEG
