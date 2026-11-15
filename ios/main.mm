@@ -189,6 +189,10 @@ struct P3PButton {
     std::uint32_t _padMask;
     std::uint8_t _padX, _padY;
     BOOL _hideButtons;
+    // The small toggle at the top: hides the d-pad and the face buttons
+    // (L, R, SELECT and START stay), so the whole picture is free for touches.
+    CGRect _toggleFrame;
+    BOOL _compact;
     std::uint32_t _sent;
     std::uint16_t _sentAnalog;
 }
@@ -206,6 +210,7 @@ struct P3PButton {
         _gestureStart = [NSMapTable weakToStrongObjectsMapTable];
         _dragX = _dragY = _padX = _padY = 128;
         _sent = 0xFFFFFFFFu;
+        _compact = [[NSUserDefaults standardUserDefaults] boolForKey:@"compactPad"];
     }
     return self;
 }
@@ -244,14 +249,19 @@ struct P3PButton {
     const CGFloat smallW = 76.0 * unit, smallH = 28.0 * unit, gap = 14.0 * unit;
     _buttons.push_back({CGRectMake(left, top + shoulderH + gap, smallW, smallH), Select, "SELECT", false});
     _buttons.push_back({CGRectMake(right - smallW, top + shoulderH + gap, smallW, smallH), Start, "START", false});
+    const CGFloat toggleW = 64.0 * unit, toggleH = 26.0 * unit;
+    _toggleFrame = CGRectMake(CGRectGetMidX(b) - toggleW / 2.0, top + 14.0, toggleW, toggleH);
     [self setNeedsDisplay];
 }
 
 - (std::uint32_t)maskAtPoint:(CGPoint)p {
     using namespace p3pios::button;
     std::uint32_t mask = 0;
-    for (const auto &button : _buttons)
+    for (const auto &button : _buttons) {
+        if (_compact && button.round) continue;
         if (CGRectContainsPoint(CGRectInset(button.frame, -10.0, -10.0), p)) mask |= button.mask;
+    }
+    if (_compact) return mask;
     const CGFloat dx = p.x - _padCenter.x, dy = p.y - _padCenter.y;
     const CGFloat distance = std::sqrt(dx * dx + dy * dy);
     if (distance <= _padRadius * 1.35 && distance >= _padRadius * 0.18) {
@@ -345,11 +355,15 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     });
 }
 
+- (BOOL)onToggle:(CGPoint)p {
+    return CGRectContainsPoint(CGRectInset(_toggleFrame, -10.0, -10.0), p);
+}
+
 - (void)gestureBegan:(NSSet<UITouch *> *)touches {
     if (!_gesturesEnabled || !_inputEnabled) return;
     for (UITouch *touch in touches) {
         const CGPoint p = [touch locationInView:self];
-        if ([self maskAtPoint:p] != 0u) continue;
+        if ([self maskAtPoint:p] != 0u || [self onToggle:p]) continue;
         if (_gestureStart.count == 0) {
             _gestureBegan = touch.timestamp;
             _gestureFingers = 0;
@@ -444,6 +458,13 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         _hideButtons = NO;
         [self setNeedsDisplay];
     }
+    for (UITouch *touch in touches) {
+        if (![self onToggle:[touch locationInView:self]]) continue;
+        _compact = !_compact;
+        [[NSUserDefaults standardUserDefaults] setBool:_compact forKey:@"compactPad"];
+        [self setNeedsDisplay];
+        break;
+    }
     [self gestureBegan:touches];
     [self updateWithEvent:event];
 }
@@ -465,6 +486,23 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     UIColor *held = [UIColor colorWithWhite:1.0 alpha:0.42];
     UIColor *line = [UIColor colorWithWhite:1.0 alpha:0.45];
 
+    // The toggle: a pill reading "NUT" with a dot when the pad is shown.
+    {
+        UIBezierPath *pill = [UIBezierPath bezierPathWithRoundedRect:_toggleFrame cornerRadius:_toggleFrame.size.height / 2.0];
+        [[UIColor colorWithWhite:1.0 alpha:_compact ? 0.10 : 0.22] setFill];
+        [pill fill];
+        [line setStroke];
+        pill.lineWidth = 1.0;
+        [pill stroke];
+        NSString *text = _compact ? @"HI\u1EC6N N\u00DAT" : @"\u1EA8N N\u00DAT";
+        NSDictionary *attributes = @{NSFontAttributeName : [UIFont boldSystemFontOfSize:_toggleFrame.size.height * 0.4],
+                                     NSForegroundColorAttributeName : [UIColor colorWithWhite:1.0 alpha:0.75]};
+        const CGSize size = [text sizeWithAttributes:attributes];
+        [text drawAtPoint:CGPointMake(CGRectGetMidX(_toggleFrame) - size.width / 2.0, CGRectGetMidY(_toggleFrame) - size.height / 2.0)
+           withAttributes:attributes];
+    }
+
+    if (!_compact) {
     // D-pad: a disc with four arrows.
     const CGRect disc = CGRectMake(_padCenter.x - _padRadius, _padCenter.y - _padRadius, _padRadius * 2.0, _padRadius * 2.0);
     CGContextSetFillColorWithColor(context, idle.CGColor);
@@ -486,7 +524,10 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         CGContextFillPath(context);
     }
 
+    }
+
     for (const auto &button : _buttons) {
+        if (_compact && button.round) continue;
         const bool down = (_mask & button.mask) != 0;
         CGContextSetFillColorWithColor(context, (down ? held : idle).CGColor);
         CGContextSetStrokeColorWithColor(context, line.CGColor);
@@ -600,7 +641,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog). Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Muon tat: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog). Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Nut AN NUT o giua tren: an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
