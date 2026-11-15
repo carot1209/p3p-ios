@@ -8,6 +8,7 @@
 //   report.txt       build, speed and the reason of a stop; attach it to bug reports
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/QuartzCore.h>
@@ -17,6 +18,7 @@
 #include "metal_backend.hpp"
 
 #include <atomic>
+#include <dlfcn.h>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -162,6 +164,8 @@ struct P3PButton {
 @property(nonatomic, assign) p3pios::LiveRunner *runner;
 @property(nonatomic, assign) BOOL inputEnabled;
 @property(nonatomic, assign) BOOL gesturesEnabled;
+- (void)pollController;
+- (void)releaseAll;
 @end
 
 @implementation P3PControlsView {
@@ -170,13 +174,23 @@ struct P3PButton {
     CGFloat _padRadius;
     std::uint32_t _mask;
     // Gestures on the picture (touches that start away from the buttons):
-    // tap = CROSS, two-finger tap = CIRCLE, swipe = a d-pad press.
+    // tap = CROSS, two-finger tap = CIRCLE, one finger dragged and held = a
+    // stick (d-pad + analog) for as long as it stays down.
     NSMapTable<UITouch *, NSValue *> *_gestureStart; // touch -> start point
     NSTimeInterval _gestureBegan;
     NSUInteger _gestureFingers;
     BOOL _gestureMoved;
+    std::uint32_t _dragMask;
+    std::uint8_t _dragX, _dragY;
+    NSTimeInterval _dragSince;
     std::uint32_t _pulse;
     std::uint64_t _pulseSerial;
+    // A game controller (Xbox, PlayStation, MFi) read every frame.
+    std::uint32_t _padMask;
+    std::uint8_t _padX, _padY;
+    BOOL _hideButtons;
+    std::uint32_t _sent;
+    std::uint16_t _sentAnalog;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -190,6 +204,8 @@ struct P3PButton {
         _inputEnabled = YES;
         _gesturesEnabled = YES;
         _gestureStart = [NSMapTable weakToStrongObjectsMapTable];
+        _dragX = _dragY = _padX = _padY = 128;
+        _sent = 0xFFFFFFFFu;
     }
     return self;
 }
@@ -248,23 +264,69 @@ struct P3PButton {
     return mask;
 }
 
+static std::uint8_t axis_byte(CGFloat v) {
+    v = MAX(-1.0, MIN(1.0, v));
+    const long value = std::lround(127.5 + v * 127.5);
+    return static_cast<std::uint8_t>(value < 0 ? 0 : value > 255 ? 255 : value);
+}
+
+// Directions of a vector (x right, y down) in 8 sectors.
+static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
+    using namespace p3pios::button;
+    const CGFloat threshold = std::sqrt(dx * dx + dy * dy) * 0.38;
+    std::uint32_t mask = 0;
+    if (dx < -threshold) mask |= Left;
+    if (dx > threshold) mask |= Right;
+    if (dy < -threshold) mask |= Up;
+    if (dy > threshold) mask |= Down;
+    return mask;
+}
+
 - (void)sendPad {
-    if (_runner != nullptr) _runner->set_pad(_inputEnabled ? (_mask | _pulse) : 0u);
+    std::uint32_t buttons = _mask | _pulse | _dragMask | _padMask;
+    std::uint8_t x = 128, y = 128;
+    if (_padX != 128 || _padY != 128) { x = _padX; y = _padY; }
+    else if (_dragMask != 0u) { x = _dragX; y = _dragY; }
+    if (!_inputEnabled) { buttons = 0; x = y = 128; }
+    const std::uint16_t analog = static_cast<std::uint16_t>(x << 8 | y);
+    if (buttons == _sent && analog == _sentAnalog) return;
+    _sent = buttons;
+    _sentAnalog = analog;
+    if (_runner != nullptr) _runner->set_pad(buttons, x, y);
 }
 
 - (void)updateWithEvent:(UIEvent *)event {
-    std::uint32_t mask = 0;
+    std::uint32_t mask = 0, drag = 0;
     for (UITouch *touch in [event touchesForView:self]) {
         if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) continue;
-        if ([_gestureStart objectForKey:touch] != nil) continue; // a gesture, not a button
-        mask |= [self maskAtPoint:[touch locationInView:self]];
+        NSValue *start = [_gestureStart objectForKey:touch];
+        if (start == nil) {
+            mask |= [self maskAtPoint:[touch locationInView:self]];
+            continue;
+        }
+        if (_gestureFingers != 1) continue;
+        const CGPoint a = start.CGPointValue, b = [touch locationInView:self];
+        const CGFloat dx = b.x - a.x, dy = b.y - a.y, distance = std::sqrt(dx * dx + dy * dy);
+        if (distance >= 22.0) _gestureMoved = YES;
+        if (!_gestureMoved) continue;
+        // Held drag: a stick centred where the finger came down. Full tilt
+        // at 70 pt; under 14 pt it rests in the middle.
+        const CGFloat full = 70.0;
+        if (distance >= 14.0) {
+            drag = direction_mask(dx, dy);
+            _dragX = axis_byte(dx / full);
+            _dragY = axis_byte(dy / full);
+        } else {
+            _dragX = _dragY = 128;
+        }
     }
-    if (!_inputEnabled) mask = 0;
-    if (mask != _mask) {
-        _mask = mask;
-        [self sendPad];
-        [self setNeedsDisplay];
-    }
+    if (!_inputEnabled) mask = drag = 0;
+    if (drag != 0u && _dragMask == 0u) _dragSince = event.timestamp;
+    const BOOL redraw = mask != _mask;
+    _mask = mask;
+    _dragMask = drag;
+    [self sendPad];
+    if (redraw) [self setNeedsDisplay];
 }
 
 // A short press the game sees for a few of its frames (it reads the pad at
@@ -295,10 +357,11 @@ struct P3PButton {
         }
         [_gestureStart setObject:[NSValue valueWithCGPoint:p] forKey:touch];
         _gestureFingers = MAX(_gestureFingers, (NSUInteger)_gestureStart.count);
+        if (_gestureFingers > 1) _dragMask = 0; // two fingers: a tap, not a stick
     }
 }
 
-- (void)gestureEnded:(NSSet<UITouch *> *)touches cancelled:(BOOL)cancelled {
+- (void)gestureEnded:(NSSet<UITouch *> *)touches cancelled:(BOOL)cancelled event:(UIEvent *)event {
     using namespace p3pios::button;
     for (UITouch *touch in touches) {
         NSValue *start = [_gestureStart objectForKey:touch];
@@ -307,47 +370,97 @@ struct P3PButton {
         const CGPoint a = start.CGPointValue, b = [touch locationInView:self];
         const CGFloat dx = b.x - a.x, dy = b.y - a.y, distance = std::sqrt(dx * dx + dy * dy);
         const NSTimeInterval held = touch.timestamp - _gestureBegan;
-        if (cancelled || _gestureMoved) continue;
-        if (distance >= 40.0 && held < 0.6 && _gestureFingers == 1) {
-            // Swipe: one d-pad step in its main direction.
-            _gestureMoved = YES;
-            if (std::fabs(dx) > std::fabs(dy)) [self pulse:dx < 0 ? Left : Right];
-            else [self pulse:dy < 0 ? Up : Down];
+        if (cancelled) continue;
+        if (_gestureMoved) {
+            // A flick shorter than a game frame or two still moves one step.
+            if (_dragMask != 0u && event.timestamp - _dragSince < 0.12) [self pulse:direction_mask(dx, dy)];
         } else if (distance < 16.0 && held < 0.35 && _gestureStart.count == 0) {
             [self pulse:_gestureFingers >= 2 ? Circle : Cross];
-        } else if (distance >= 16.0) {
-            _gestureMoved = YES;
         }
     }
+}
+
+// Called every screen refresh: merges a connected game controller. The
+// GameController framework is opened at run time, so the app links as before.
+- (void)pollController {
+    using namespace p3pios::button;
+    static Class controllerClass = Nil;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        dlopen("/System/Library/Frameworks/GameController.framework/GameController", RTLD_LAZY);
+        controllerClass = NSClassFromString(@"GCController");
+    }
+    std::uint32_t mask = 0;
+    CGFloat sx = 0.0, sy = 0.0;
+    if (controllerClass != Nil) {
+        NSArray<GCController *> *list = [(id)controllerClass controllers];
+        for (GCController *controller in list) {
+            GCExtendedGamepad *g = controller.extendedGamepad;
+            if (g == nil) continue;
+            // Xbox layout by position: A (bottom) = CROSS, B (right) = CIRCLE,
+            // X (left) = SQUARE, Y (top) = TRIANGLE; View = SELECT, Menu = START.
+            if (g.buttonA.pressed) mask |= Cross;
+            if (g.buttonB.pressed) mask |= Circle;
+            if (g.buttonX.pressed) mask |= Square;
+            if (g.buttonY.pressed) mask |= Triangle;
+            if (g.leftShoulder.pressed || g.leftTrigger.pressed) mask |= L;
+            if (g.rightShoulder.pressed || g.rightTrigger.pressed) mask |= R;
+            if (g.buttonMenu.pressed) mask |= Start;
+            if (g.buttonOptions != nil && g.buttonOptions.pressed) mask |= Select;
+            if (g.dpad.up.pressed) mask |= Up;
+            if (g.dpad.down.pressed) mask |= Down;
+            if (g.dpad.left.pressed) mask |= Left;
+            if (g.dpad.right.pressed) mask |= Right;
+            const CGFloat x = g.leftThumbstick.xAxis.value, y = -g.leftThumbstick.yAxis.value; // y down
+            if (std::sqrt(x * x + y * y) > std::sqrt(sx * sx + sy * sy)) { sx = x; sy = y; }
+        }
+    }
+    const CGFloat tilt = std::sqrt(sx * sx + sy * sy);
+    if (tilt >= 0.5) mask |= direction_mask(sx, sy); // menus read the d-pad
+    _padX = tilt >= 0.15 ? axis_byte(sx) : 128;
+    _padY = tilt >= 0.15 ? axis_byte(sy) : 128;
+    _padMask = mask;
+    // The touch buttons fade out while the controller is used; a touch brings them back.
+    if ((mask != 0u || tilt >= 0.15) && !_hideButtons) {
+        _hideButtons = YES;
+        [self setNeedsDisplay];
+    }
+    [self sendPad];
 }
 
 - (void)releaseAll {
     _mask = 0;
     _pulse = 0;
+    _dragMask = 0;
     ++_pulseSerial;
     [_gestureStart removeAllObjects];
-    if (_runner != nullptr) _runner->set_pad(0);
+    [self sendPad];
     [self setNeedsDisplay];
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (_hideButtons) {
+        _hideButtons = NO;
+        [self setNeedsDisplay];
+    }
     [self gestureBegan:touches];
     [self updateWithEvent:event];
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self updateWithEvent:event]; }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self gestureEnded:touches cancelled:NO];
+    [self gestureEnded:touches cancelled:NO event:event];
     [self updateWithEvent:event];
 }
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self gestureEnded:touches cancelled:YES];
+    [self gestureEnded:touches cancelled:YES event:event];
     [self updateWithEvent:event];
 }
 
 - (void)drawRect:(CGRect)rect {
     using namespace p3pios::button;
     CGContextRef context = UIGraphicsGetCurrentContext();
-    if (context == NULL) return;
+    if (context == NULL || _hideButtons) return;
     UIColor *idle = [UIColor colorWithWhite:1.0 alpha:0.16];
     UIColor *held = [UIColor colorWithWhite:1.0 alpha:0.42];
     UIColor *line = [UIColor colorWithWhite:1.0 alpha:0.45];
@@ -487,7 +600,7 @@ struct P3PButton {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, vuot = phim huong. Muon tat: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog). Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Muon tat: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
@@ -633,6 +746,7 @@ struct P3PButton {
         if (_ticks % 60u == 1u) [self startGameIfPossible];
         return;
     }
+    [_controls pollController];
     const std::uint64_t serial = _runner->copy_frame(_usesGpuDisplay ? nullptr : _frame.data(), _serial);
     if (serial != _serial) {
         if (_serial == 0u) [self showMessage:@""];
