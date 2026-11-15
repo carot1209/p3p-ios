@@ -193,6 +193,11 @@ struct P3PButton {
     CGFloat _gestureDrift;      // farthest a single finger went from its start
     NSTimeInterval _twoSince;   // when the second finger came down
     std::uint32_t _holdMask;    // TRIANGLE while two fingers rest
+    // Taps by another finger while one finger drags the stick: CROSS (or
+    // CIRCLE with two), without stopping the walk.
+    NSMapTable<UITouch *, NSValue *> *_tapStart;
+    NSTimeInterval _tapBegan;
+    NSUInteger _tapFingers;
     std::uint32_t _dragMask;
     std::uint8_t _dragX, _dragY;
     NSTimeInterval _dragSince;
@@ -221,6 +226,7 @@ struct P3PButton {
         _inputEnabled = YES;
         _gesturesEnabled = YES;
         _gestureStart = [NSMapTable weakToStrongObjectsMapTable];
+        _tapStart = [NSMapTable weakToStrongObjectsMapTable];
         _dragX = _dragY = _padX = _padY = 128;
         _sent = 0xFFFFFFFFu;
         _compact = [[NSUserDefaults standardUserDefaults] boolForKey:@"compactPad"];
@@ -432,6 +438,12 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     for (UITouch *touch in touches) {
         const CGPoint p = [touch locationInView:self];
         if ([self maskAtPoint:p] != 0u || [self onToggle:p]) continue;
+        if (_gestureStart.count == 1 && _gestureFingers == 1 && (_gestureMoved || _gestureUsed)) {
+            if (_tapStart.count == 0) { _tapBegan = touch.timestamp; _tapFingers = 0; }
+            [_tapStart setObject:[NSValue valueWithCGPoint:p] forKey:touch];
+            _tapFingers = MAX(_tapFingers, (NSUInteger)_tapStart.count);
+            continue;
+        }
         if (_gestureStart.count == 0) {
             _gestureBegan = touch.timestamp;
             _gestureFingers = 0;
@@ -449,6 +461,15 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 - (void)gestureEnded:(NSSet<UITouch *> *)touches cancelled:(BOOL)cancelled event:(UIEvent *)event {
     using namespace p3pios::button;
     for (UITouch *touch in touches) {
+        NSValue *tap = [_tapStart objectForKey:touch];
+        if (tap != nil) {
+            [_tapStart removeObjectForKey:touch];
+            const CGPoint a = tap.CGPointValue, b = [touch locationInView:self];
+            const CGFloat dist = std::hypot(b.x - a.x, b.y - a.y);
+            if (!cancelled && dist < 24.0 && touch.timestamp - _tapBegan < 0.4 && _tapStart.count == 0)
+                [self pulse:_tapFingers >= 2 ? Circle : Cross];
+            continue;
+        }
         NSValue *start = [_gestureStart objectForKey:touch];
         if (start == nil) continue;
         [_gestureStart removeObjectForKey:touch];
