@@ -1,0 +1,105 @@
+name: Build P3P IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'claude/**']
+    paths-ignore: ['README.md']
+
+concurrency:
+  group: build-p3p-ipa
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  # The Metal back end against recorded frames of the game (scripts/metal_test.sh);
+  # the result and the pictures go to the ci-metal branch.
+  metal-test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay the GPU trace on Metal
+        run: scripts/metal_test.sh
+      - name: Publish to ci-metal
+        if: always()
+        run: |
+          set +e
+          SHA="$(git rev-parse --short HEAD)"
+          TMP="$(mktemp -d)"
+          cp out/metal/* "$TMP/" 2>/dev/null
+          git config user.name "p3p-ci"
+          git config user.email "p3p-ci@users.noreply.github.com"
+          git checkout -q --orphan ci-metal-new
+          git rm -rfq --cached . >/dev/null 2>&1
+          git clean -ffdxq
+          cp "$TMP"/* .
+          echo "$SHA" > commit.txt
+          git add -A
+          git commit -qm "metal test for $SHA"
+          git push -f origin ci-metal-new:ci-metal
+
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache AOT archive
+        uses: actions/cache@v4
+        with:
+          path: ~/p3p-aot-cache
+          key: p3p-aot-${{ hashFiles('game/eboot.elf', 'scripts/gen_make.py', 'upstream.ref', 'patches/fmv_unhardcode.txt') }}
+
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: ~/p3p-ffmpeg-ios
+          key: p3p-ffmpeg-ios-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+
+      - name: Build IPA
+        run: |
+          set -o pipefail
+          mkdir -p out
+          P3P_FFMPEG_PREFIX="$HOME/p3p-ffmpeg-ios" P3P_AOT_CACHE="$HOME/p3p-aot-cache" scripts/build_ios.sh 2>&1 | tee out/build.log
+
+      - name: Collect log
+        if: always()
+        run: |
+          mkdir -p out
+          [ -f out/build.log ] && tail -n 400 out/build.log > out/build-log-tail.txt || echo "no log" > out/build-log-tail.txt
+          echo "${{ job.status }}" > out/status.txt
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: P3P-ipa
+          path: |
+            out/P3P-unsigned.ipa
+            out/build-info.txt
+            out/build-log-tail.txt
+
+      # The log and the IPA go to the ci-logs branch too (one commit, replaced
+      # on every build), so a build can be checked without the Actions page.
+      - name: Publish log to ci-logs
+        if: always()
+        run: |
+          set +e
+          SHA="$(git rev-parse --short HEAD)"
+          TMP="$(mktemp -d)"
+          cp out/build-log-tail.txt out/status.txt "$TMP/" 2>/dev/null
+          cp out/build-info.txt "$TMP/" 2>/dev/null
+          cp out/P3P-unsigned.ipa "$TMP/" 2>/dev/null
+          git config user.name "p3p-ci"
+          git config user.email "p3p-ci@users.noreply.github.com"
+          git checkout -q --orphan ci-logs-new
+          git rm -rfq --cached . >/dev/null 2>&1
+          git clean -ffdxq
+          cp "$TMP"/* .
+          echo "$SHA" > commit.txt
+          git add -A
+          git commit -qm "ci log for $SHA"
+          git push -f origin ci-logs-new:ci-logs
