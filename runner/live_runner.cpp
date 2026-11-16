@@ -5,7 +5,6 @@
 #ifdef P3P_HAVE_FFMPEG
 #include "ffmpeg_decoder.hpp"
 #include "movie_player.hpp"
-#include "cpk_overlay.hpp"
 #endif
 
 #include "p3p3ds/ge/renderer.hpp"
@@ -263,7 +262,6 @@ struct LiveRunner::Impl {
     gpu::HwRenderer *hw{nullptr};        // GPU renderer (one of the two is set)
     gpu::TraceBackend *tracer{nullptr};
     std::string renderer_name{"-"};
-    std::shared_ptr<CpkOverlayFileSystem> music_overlay;
     bool movies_decoded{false};
 #ifdef P3P_HAVE_FFMPEG
     std::shared_ptr<MovieStats> movie_stats = std::make_shared<MovieStats>();
@@ -503,15 +501,6 @@ struct LiveRunner::Impl {
                           rt_owner && rt_owner->stopped() ? rt_owner->stop_reason().c_str() : "-", fatal.empty() ? "-" : fatal.c_str());
             std::string text(buf);
             text += "render : " + renderer_name + "\n";
-            if (music_overlay) {
-                if (!music_overlay->note().empty()) text += "music  : " + music_overlay->note() + "\n";
-                for (const auto &o : music_overlay->overrides()) {
-                    std::snprintf(buf, sizeof buf, "music  : %s replaced (%llu KB, %llu KB read)\n", o.name.c_str(),
-                                  static_cast<unsigned long long>(o.size / 1024),
-                                  static_cast<unsigned long long>(o.bytes_read->load() / 1024));
-                    text += buf;
-                }
-            }
 #ifdef P3P_HAVE_FFMPEG
             if (movies_decoded) {
                 const auto &mv = *movie_stats;
@@ -573,13 +562,10 @@ struct LiveRunner::Impl {
             stage = "mount iso";
             set_stage(stage);
             kernel.umd().set_medium_present(true);
+            kernel.io().mount("disc0:", std::make_shared<vfs::IsoFileSystem>(config.iso_path));
             std::error_code ec;
             const std::string ms0 = config.data_dir + "/ms0";
             const std::string mods = config.data_dir + "/mods";
-            // Music mods (mods/bind/data/sound) are served from inside umd0.cpk.
-            music_overlay = std::make_shared<CpkOverlayFileSystem>(std::make_shared<vfs::IsoFileSystem>(config.iso_path),
-                                                                   std::filesystem::path(mods) / "bind" / "data" / "sound");
-            kernel.io().mount("disc0:", music_overlay);
             std::filesystem::create_directories(ms0, ec);
             std::filesystem::create_directories(mods, ec);
             kernel.io().mount("ms0:", std::make_shared<vfs::HostFileSystem>(ms0), true);
