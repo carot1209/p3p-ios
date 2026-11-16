@@ -58,7 +58,7 @@ def main():
     aot = sorted(os.path.join(gen, n) for n in os.listdir(gen) if n.endswith(".cpp"))
     if len(aot) < 2:
         sys.exit(f"no generated AOT sources in {gen}")
-    runner = [os.path.join(ROOT, "runner", "live_runner.cpp"), os.path.join(ROOT, "runner", "ffmpeg_decoder.cpp"), os.path.join(ROOT, "runner", "movie_player.cpp"), os.path.join(ROOT, "gpu", "hw_renderer.cpp"),
+    runner = [os.path.join(ROOT, "runner", "live_runner.cpp"), os.path.join(ROOT, "runner", "ffmpeg_decoder.cpp"), os.path.join(ROOT, "runner", "movie_player.cpp"), os.path.join(ROOT, "runner", "cpk_overlay.cpp"), os.path.join(ROOT, "gpu", "hw_renderer.cpp"),
               os.path.join(ROOT, "gpu", "trace.cpp")]
 
     includes = [

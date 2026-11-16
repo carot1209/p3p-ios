@@ -198,6 +198,10 @@ struct P3PButton {
     NSMapTable<UITouch *, NSValue *> *_tapStart;
     NSTimeInterval _tapBegan;
     NSUInteger _tapFingers;
+    // Camera: a sideways drag that starts on the right half of the screen, or
+    // by a second finger while the first one walks, holds L or R.
+    BOOL _gestureCamera;
+    std::uint32_t _camMask, _tapCamMask;
     std::uint32_t _dragMask;
     std::uint8_t _dragX, _dragY;
     NSTimeInterval _dragSince;
@@ -365,7 +369,9 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 }
 
 - (void)sendPad {
-    std::uint32_t buttons = _mask | _pulse | _dragMask | _padMask | _holdMask;
+    std::uint32_t buttons = _mask | _pulse | _dragMask | _padMask | _holdMask | _tapCamMask;
+    // The one-finger camera waits 0.2 s, so that a quick flick stays a d-pad step.
+    if (_camMask != 0u && [NSProcessInfo processInfo].systemUptime - _gestureBegan >= 0.2) buttons |= _camMask;
     std::uint8_t x = 128, y = 128;
     if (_padX != 128 || _padY != 128) { x = _padX; y = _padY; }
     else if (_dragMask != 0u) { x = _dragX; y = _dragY; }
@@ -378,9 +384,16 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
 }
 
 - (void)updateWithEvent:(UIEvent *)event {
-    std::uint32_t mask = 0, drag = 0;
+    using namespace p3pios::button;
+    std::uint32_t mask = 0, drag = 0, cam = 0, tapCam = 0;
     for (UITouch *touch in [event touchesForView:self]) {
         if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) continue;
+        NSValue *second = [_tapStart objectForKey:touch];
+        if (second != nil) {
+            const CGFloat sx = [touch locationInView:self].x - second.CGPointValue.x;
+            if (std::fabs(sx) >= 22.0) tapCam = sx < 0 ? L : R;
+            continue;
+        }
         NSValue *start = [_gestureStart objectForKey:touch];
         if (start == nil) {
             mask |= [self maskAtPoint:[touch locationInView:self]];
@@ -391,8 +404,15 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         const CGFloat dx = b.x - a.x, dy = b.y - a.y, distance = std::sqrt(dx * dx + dy * dy);
         _gestureDrift = MAX(_gestureDrift, distance);
         if (_gestureUsed) continue;
-        if (distance >= 22.0) _gestureMoved = YES;
+        if (distance >= 22.0 && !_gestureMoved) {
+            _gestureMoved = YES;
+            _gestureCamera = a.x > CGRectGetMidX(self.bounds) && std::fabs(dx) > std::fabs(dy);
+        }
         if (!_gestureMoved) continue;
+        if (_gestureCamera) {
+            if (std::fabs(dx) >= 14.0) cam = dx < 0 ? L : R;
+            continue;
+        }
         // Held drag: a stick centred where the finger came down. Full tilt
         // at 70 pt; under 14 pt it rests in the middle.
         const CGFloat full = 70.0;
@@ -404,7 +424,9 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
             _dragX = _dragY = 128;
         }
     }
-    if (!_inputEnabled) mask = drag = 0;
+    if (!_inputEnabled) mask = drag = cam = tapCam = 0;
+    _camMask = cam;
+    _tapCamMask = tapCam;
     if (drag != 0u && _dragMask == 0u) _dragSince = event.timestamp;
     const BOOL redraw = mask != _mask;
     _mask = mask;
@@ -448,6 +470,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
             _gestureBegan = touch.timestamp;
             _gestureFingers = 0;
             _gestureMoved = NO;
+            _gestureCamera = NO;
             _gestureUsed = NO;
             _gestureDrift = 0.0;
         }
@@ -481,7 +504,11 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
             [self sendPad];
         }
         if (cancelled || _gestureUsed) continue;
-        if (_gestureMoved) {
+        if (_gestureCamera) {
+            // A quick sideways flick is still one d-pad step.
+            if (touch.timestamp - _gestureBegan < 0.2) [self pulse:direction_mask(dx, dy)];
+            _camMask = 0;
+        } else if (_gestureMoved) {
             // A flick shorter than a game frame or two still moves one step.
             if (_dragMask != 0u && event.timestamp - _dragSince < 0.12) [self pulse:direction_mask(dx, dy)];
         } else if (distance < 16.0 && held < 0.35 && _gestureStart.count == 0) {
@@ -561,6 +588,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
     _mask = 0;
     _pulse = 0;
     _dragMask = 0;
+    _camMask = _tapCamMask = 0;
     _holdMask = 0;
     _gestureUsed = NO;
     ++_pulseSerial;
@@ -773,7 +801,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Xoay doc: hinh o tren, nut o duoi (bat khoa xoay cua iPhone de giu 1 huong). Nut AN/HIEN o dai den canh hinh (doc: giua L va R): an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Xoay camera (Tartarus): vuot ngang va giu o nua phai man hinh = giu L/R; hoac dang keo di thi ngon thu hai vuot ngang. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Xoay doc: hinh o tren, nut o duoi (bat khoa xoay cua iPhone de giu 1 huong). Nut AN/HIEN o dai den canh hinh (doc: giua L va R): an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
