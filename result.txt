@@ -1,0 +1,57 @@
+ProductName:		macOS ProductVersion:		15.8.2 BuildVersion:		24H232 
+== build
+== replay
+soft (soft): 12 pictures in 632 ms
+metal (Metal, Apple Paravirtual device): 12 pictures in 250 ms
+picture     mean diff   pixels off by > 16
+w01 f00       0.010      0.00%
+w01 f01       0.010      0.00%
+w02 f00       0.014      0.00%
+w02 f01       0.014      0.00%
+w03 f00       0.000      0.00%
+w03 f01       0.008      0.00%
+w04 f00       0.000      0.00%
+w04 f01       0.019      0.00%
+w05 f00       0.021      0.00%
+w05 f01       0.021      0.00%
+w06 f00       0.000      0.00%
+w06 f01       0.023      0.00%
+exit code: 0
+== replay at 3x (read back as block means; edges differ a little from 1x)
+soft (soft): 12 pictures in 578 ms
+metal3 (Metal, Apple Paravirtual device): 12 pictures in 555 ms
+picture     mean diff   pixels off by > 16
+w01 f00       1.852      4.53%
+w01 f01       1.873      4.53%
+w02 f00       0.696      0.61%
+w02 f01       0.696      0.61%
+w03 f00       0.823      0.63%
+w03 f01       0.544      0.37%
+w04 f00       0.055      0.00%
+w04 f01       0.097      0.00%
+w05 f00       0.578      0.39%
+w05 f01       0.580      0.39%
+w06 f00       0.394      0.00%
+w06 f01       0.225      0.00%
+exit code: 0
+== movie pictures (uploads into a target, then shown) at 1x and 4x
+soft (soft): 6 pictures in 14 ms
+metal (Metal, Apple Paravirtual device): 6 pictures in 119 ms
+picture     mean diff   pixels off by > 16
+w01 f00       0.000      0.00%
+w01 f01       0.000      0.00%
+w01 f02       0.000      0.00%
+w02 f00       0.000      0.00%
+w02 f01       0.000      0.00%
+w02 f02       0.000      0.00%
+exit code: 0
+soft (soft): 6 pictures in 23 ms
+metal4 (Metal, Apple Paravirtual device): 6 pictures in 237 ms
+picture     mean diff   pixels off by > 16
+w01 f00       2.602      2.26%
+w01 f01       2.601      2.19%
+w01 f02       2.606      2.16%
+w02 f00       0.272      0.00%
+w02 f01       0.243      0.00%
+w02 f02       0.248      0.00%
+exit code: 0
