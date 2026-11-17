@@ -406,7 +406,9 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
         if (_gestureUsed) continue;
         if (distance >= 22.0 && !_gestureMoved) {
             _gestureMoved = YES;
-            _gestureCamera = a.x > CGRectGetMidX(self.bounds) && std::fabs(dx) > std::fabs(dy);
+            // One finger always walks (on town maps a sideways drag must stay
+            // LEFT/RIGHT); the camera is a second finger's sideways drag.
+            _gestureCamera = NO;
         }
         if (!_gestureMoved) continue;
         if (_gestureCamera) {
@@ -801,7 +803,7 @@ static std::uint32_t direction_mask(CGFloat dx, CGFloat dy) {
                      @"ms0/ la the nho (file save). report.txt ghi toc do va ly do dung, gui kem khi bao loi.\n"
                      @"Hinh ve bang GPU (Metal) o do phan giai 4x PSP. Muon doi: tao file resolution.txt chi chua so 1, 2, 3 hoac 4.\n"
                      @"Phim anime (mod Cutscenes Restored, co phu de): chep nguyen thu muc mod (co Package.xml, data, FMV) vao day; app tu xep vao mods/ khi mo. Chi tuyen nam. Bam START de bo qua phim.\n"
-                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Xoay camera (Tartarus): vuot ngang va giu o nua phai man hinh = giu L/R; hoac dang keo di thi ngon thu hai vuot ngang. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Xoay doc: hinh o tren, nut o duoi (bat khoa xoay cua iPhone de giu 1 huong). Nut AN/HIEN o dai den canh hinh (doc: giua L va R): an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
+                     @"Cham man hinh (ngoai cac nut): cham 1 ngon = X, cham 2 ngon = O, keo va giu = di chuyen (nhu can analog), giu 2 ngon = giu tam giac (tua thoai), giu 1 ngon yen 0,8 giay = vuong. Xoay camera (Tartarus): dang keo di bang 1 ngon, ngon thu hai vuot ngang va giu = giu L/R. Tay cam Xbox/PS: A=X, B=O, X=vuong, Y=tam giac, LB/LT=L, RB/RT=R, Menu=START, View=SELECT. Xoay doc: hinh o tren, nut o duoi (bat khoa xoay cua iPhone de giu 1 huong). Nut AN/HIEN o dai den canh hinh (doc: giua L va R): an D-pad va 4 nut mat (giu L, R, SELECT, START). Muon tat cam ung: tao file rong ten tat-cam-ung.txt.\n"
                      @"Tat Data Install trong Config cua game (du lieu da cai se de len file mod).\n"
                      @"Cach cu: file .SFD cua P3 FES trong thu muc movies/ (chi dung khi khong cai mod).\n"
                      @"Neu hinh bi loi, tao file rong ten cpu-renderer.txt trong thu muc nay roi mo lai app de ve bang CPU (cham hon).\n";
