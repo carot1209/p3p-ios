@@ -1,0 +1,89 @@
+== upstream ce587d47d9c8f9a2fc7d0fcbf551750dea8f72d4
+   patch 0001-codegen-complete-ImagePatch-for-libcxx.patch
+== code generator (host)
+== AOT generation
+Automatic global codegen completed
+  function seeds:    21968
+  emitted code PCs:  751410
+  registered blocks: 170794
+  source units:      237
+  rewritten units:   237
+  import wrappers:   221
+  output:            /Users/runner/work/p3p-ios/p3p-ios/build/gen/auto
+== ffmpeg (movie decoder)
+ffmpeg: cached in /Users/runner/p3p-ffmpeg-ios
+== AOT archive from cache (49060c7d4bdc68f7)
+/Users/runner/work/p3p-ios/p3p-ios/build/ios/Makefile: 8 runtime, 26 core, 238 AOT sources -> P3P
+== compile (3 jobs)
+CXX deflate.cpp
+CXX decoder.cpp
+CXX elf32.cpp
+CXX guest_memory.cpp
+CXX nid_registry.cpp
+CXX program_analysis.cpp
+CXX runtime.cpp
+CXX sha256.cpp
+CXX frontier.cpp
+CXX interpreter.cpp
+CXX vfs.cpp
+CXX iofilemgr.cpp
+CXX modulemgr.cpp
+CXX sascore.cpp
+CXX mpeg.cpp
+CXX utils.cpp
+CXX utility.cpp
+CXX savedata.cpp
+CXX ctrl.cpp
+CXX input.cpp
+CXX async_renderer.cpp
+CXX geometry.cpp
+CXX software_renderer.cpp
+CXX texture_pack.cpp
+CXX texture_replacement.cpp
+CXX xxhash.cpp
+CXX sysmem.cpp
+CXX hle_modules.cpp
+CXX threadman.cpp
+CXX threadman_hle.cpp
+CXX display.cpp
+CXX ge.cpp
+CXX umd.cpp
+CXX audio.cpp
+CXX live_runner.cpp
+CXX ffmpeg_decoder.cpp
+CXX movie_player.cpp
+CXX hw_renderer.cpp
+CXX trace.cpp
+CXX main.mm
+CXX metal_backend.mm
+xcrun -sdk iphoneos clang++ -o P3P rt/decoder.o rt/deflate.o rt/elf32.o rt/guest_memory.o rt/nid_registry.o rt/program_analysis.o rt/runtime.o rt/sha256.o core/frontier.o core/interpreter.o core/vfs.o core/iofilemgr.o core/modulemgr.o core/sascore.o core/mpeg.o core/utils.o core/utility.o core/savedata.o core/ctrl.o core/input.o core/async_renderer.o core/geometry.o core/software_renderer.o core/texture_pack.o core/texture_replacement.o core/xxhash.o core/sysmem.o core/hle_modules.o core/threadman.o core/threadman_hle.o core/display.o core/ge.o core/umd.o core/audio.o runner/live_runner.o runner/ffmpeg_decoder.o runner/movie_player.o runner/hw_renderer.o runner/trace.o main/main.o main/metal_backend.o libp3p_aot.a -arch arm64 -miphoneos-version-min=15.0 -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework AudioToolbox -framework AVFoundation -lobjc -framework Metal /Users/runner/p3p-ffmpeg-ios/lib/libavformat.a /Users/runner/p3p-ffmpeg-ios/lib/libavcodec.a /Users/runner/p3p-ffmpeg-ios/lib/libavutil.a
+== bundle
+build    : 3dcda16
+upstream : ce587d47d9c8f9a2fc7d0fcbf551750dea8f72d4
+date     : 2026-11-17T03:25:02Z
+Xcode 16.4 Build version 16F6 
+ipa      : 17297512 bytes
+/Users/runner/work/p3p-ios/p3p-ios/build/Payload/P3P.app/P3P: Mach-O 64-bit executable arm64
+/Users/runner/work/p3p-ios/p3p-ios/build/Payload/P3P.app/P3P:
+	/System/Library/Frameworks/UIKit.framework/UIKit (compatibility version 1.0.0, current version 8506.1.101)
+	/System/Library/Frameworks/Foundation.framework/Foundation (compatibility version 300.0.0, current version 3502.0.0)
+	/System/Library/Frameworks/QuartzCore.framework/QuartzCore (compatibility version 1.2.0, current version 1.11.0)
+	/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics (compatibility version 64.0.0, current version 1889.5.3)
+	/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox (compatibility version 1.0.0, current version 1000.0.0)
+	/System/Library/Frameworks/AVFoundation.framework/AVFoundation (compatibility version 1.0.0, current version 2.0.0)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+	/System/Library/Frameworks/Metal.framework/Metal (compatibility version 1.0.0, current version 368.12.0)
+	/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 1900.180.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+	/System/Library/Frameworks/AVFAudio.framework/AVFAudio (compatibility version 1.0.0, current version 1.0.0)
+	/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation (compatibility version 150.0.0, current version 3502.0.0)
+total 105832
+drwxr-xr-x  9 runner  staff       288 Nov 17 03:25 .
+drwxr-xr-x  3 runner  staff        96 Nov 17 03:24 ..
+-rw-r--r--  1 runner  staff     24732 Nov 17 03:25 AppIcon60x60@2x.png
+-rw-r--r--  1 runner  staff     52370 Nov 17 03:25 AppIcon60x60@3x.png
+-rw-r--r--  1 runner  staff     38264 Nov 17 03:25 AppIcon76x76@2x~ipad.png
+-rw-r--r--  1 runner  staff   5849468 Nov 17 03:25 eboot.elf
+-rw-r--r--  1 runner  staff      2349 Nov 17 03:25 Info.plist
+-rwxr-xr-x  1 runner  staff  48198408 Nov 17 03:25 P3P
+-rw-r--r--  1 runner  staff         8 Nov 17 03:25 PkgInfo

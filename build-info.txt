@@ -1,0 +1,29 @@
+build    : 3dcda16
+upstream : ce587d47d9c8f9a2fc7d0fcbf551750dea8f72d4
+date     : 2026-11-17T03:25:02Z
+Xcode 16.4 Build version 16F6 
+ipa      : 17297512 bytes
+/Users/runner/work/p3p-ios/p3p-ios/build/Payload/P3P.app/P3P: Mach-O 64-bit executable arm64
+/Users/runner/work/p3p-ios/p3p-ios/build/Payload/P3P.app/P3P:
+	/System/Library/Frameworks/UIKit.framework/UIKit (compatibility version 1.0.0, current version 8506.1.101)
+	/System/Library/Frameworks/Foundation.framework/Foundation (compatibility version 300.0.0, current version 3502.0.0)
+	/System/Library/Frameworks/QuartzCore.framework/QuartzCore (compatibility version 1.2.0, current version 1.11.0)
+	/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics (compatibility version 64.0.0, current version 1889.5.3)
+	/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox (compatibility version 1.0.0, current version 1000.0.0)
+	/System/Library/Frameworks/AVFoundation.framework/AVFoundation (compatibility version 1.0.0, current version 2.0.0)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+	/System/Library/Frameworks/Metal.framework/Metal (compatibility version 1.0.0, current version 368.12.0)
+	/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 1900.180.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+	/System/Library/Frameworks/AVFAudio.framework/AVFAudio (compatibility version 1.0.0, current version 1.0.0)
+	/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation (compatibility version 150.0.0, current version 3502.0.0)
+total 105832
+drwxr-xr-x  9 runner  staff       288 Nov 17 03:25 .
+drwxr-xr-x  3 runner  staff        96 Nov 17 03:24 ..
+-rw-r--r--  1 runner  staff     24732 Nov 17 03:25 AppIcon60x60@2x.png
+-rw-r--r--  1 runner  staff     52370 Nov 17 03:25 AppIcon60x60@3x.png
+-rw-r--r--  1 runner  staff     38264 Nov 17 03:25 AppIcon76x76@2x~ipad.png
+-rw-r--r--  1 runner  staff   5849468 Nov 17 03:25 eboot.elf
+-rw-r--r--  1 runner  staff      2349 Nov 17 03:25 Info.plist
+-rwxr-xr-x  1 runner  staff  48198408 Nov 17 03:25 P3P
+-rw-r--r--  1 runner  staff         8 Nov 17 03:25 PkgInfo
